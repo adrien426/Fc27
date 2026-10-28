@@ -25,7 +25,7 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
-      - run: mkdir _site && cp index.html stadium.glb _site/ && touch _site/.nojekyll
+      - run: mkdir _site && cp index.html _site/ && touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
