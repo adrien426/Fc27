@@ -100,6 +100,15 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #tvStats .tvs b{font-size:44px;font-style:italic;line-height:1}
 #tvStats .stats{margin:8px 0 6px}
 #tvStats .tvk{text-align:center;font-size:15px;color:var(--muted)}
+#ballReveal{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:6px;
+  background:var(--hud-bg);color:var(--hud-ink);border-radius:8px;padding:12px 22px 12px;box-shadow:0 12px 40px rgba(0,0,0,.5);pointer-events:none;transition:opacity .35s,transform .35s}
+#ballReveal[hidden]{display:none}
+#ballReveal.out{opacity:0;transform:translate(-50%,-50%) scale(.85)}
+#ballReveal .br-t{font-size:15px;font-weight:800;letter-spacing:.12em;color:var(--hud-muted)}
+#ballReveal img{width:118px;height:118px;display:block;transition:transform .12s}
+#ballReveal.final img{animation:brPop .45s cubic-bezier(.2,1.6,.4,1)}
+#ballReveal .br-n{font-size:24px;font-weight:800;font-style:italic;min-height:28px;color:var(--gold)}
+@keyframes brPop{from{transform:scale(.7)}to{transform:none}}
 #tvWipe{position:absolute;inset:0;pointer-events:none;overflow:hidden;display:none}
 #tvWipe.on{display:block}
 #tvWipe div{position:absolute;top:-20%;bottom:-20%;left:-70%;width:62%;display:flex;align-items:center;justify-content:center;transform:skewX(-16deg);
@@ -318,6 +327,7 @@ select.name{width:230px;cursor:pointer}
   <div id="tvBug" hidden><i></i><span>FOOT ARENA TV · EN DIRECT</span></div>
   <div id="lineups" hidden></div>
   <div id="tvStats" hidden></div>
+  <div id="ballReveal" hidden><div class="br-t">BALLON DU MATCH</div><img alt=""><div class="br-n"></div></div>
   <div id="tvWipe"><div><span>FOOT ARENA</span></div></div>
   <div id="keyHint" hidden><kbd>ZQSD / ↑↓←→</kbd><span>Courir</span><kbd>J</kbd><span>Passe</span><kbd>K</kbd><span>Tir</span><kbd>Espace</kbd><span>Tacle · Dribble avec le ballon</span><kbd>Maj</kbd><span>Sprint</span></div>
   <div id="banner"><span class="main"></span><span class="sub"></span></div>
@@ -942,14 +952,14 @@ function startMatch() {
   setupWind();
   applyTeams(); tipShown = false; applyAtmosphere(); setRainSound();
   goalsLog = []; shootout = null; passChain = [0, 0];
-  if (renderer) { drawCrowd(); paintFans(); buildPitch(); drawFascia(); redrawBoards(); }
+  if (renderer) { drawCrowd(); paintFans(); buildPitch(); drawFascia(); redrawBoards(); buildBench(); }
   score = [0, 0]; stats = newStats(); clock = 0; half = 1; time = 0; frames = [];
   added = [1 + ((Math.random() * 3) | 0), 2 + ((Math.random() * 4) | 0)]; addedShown = [false, false];
   TEAMS[0].dir = 1; TEAMS[1].dir = -1;
   makePlayers(); ctrl = null;
   drill = matchMode === 'training' ? newDrill() : null;
   kickoff(0, !drill && !!renderer);
-  if (drill) state = 'drillwait';
+  if (drill) { state = 'drillwait'; ballPick = BALLS[(Math.random() * BALLS.length) | 0][0]; applyBall(); }
   else if (renderer) startIntro();
   overlay.hidden = true; updateHud(true); tvStatsEl.hidden = true;
   if (state !== 'intro') lineupsEl.hidden = true;
@@ -1820,7 +1830,7 @@ function pressAerial(type) {
   if (state === 'replay') { endReplay(); return; }
   const p = ctrl;
   if (state !== 'play' || !p || p.aero || p.stun > 0 || p.slide > 0 || ball.owner === p || ball.held) return;
-  p.aero = { type, t: 0.75 };
+  p.aero = { type, t: 0.75 }; p.lowHead = type === 'header' && ball.z < 2.0;
   gkAction(p, type === 'volley' ? 'volley' : type);
   idleT = 0;
 }
@@ -3474,6 +3484,8 @@ function step(dt) {
     }
     if (p.role === 'GK') p.landed = false;
     if (p.role === 'GK' && p.gkaT > 0 && p.gka !== 'throw' && p.gka !== 'volley') { const f = Math.exp(-dt * 6); p.vx *= f; p.vy *= f; continue; }
+    // The side that conceded stands still, hands on hips, while the scorer celebrates
+    if (state === 'goal' && p.t === concede && mdl && mdl.clips.defeat && playerLook === 'real') { p.vx = p.vy = 0; continue; }
     if (p.siuuT != null && time - p.siuuT < SIUU_DUR) {
       p.vx = p.vy = 0;
       const P = mdl && mdl.siuuPath, st = time - p.siuuT;
@@ -3590,7 +3602,7 @@ function loadModels() {
     const box = new THREE.Box3().setFromObject(m.scene), clips = {};
     MDL_KEYS.forEach((k, i) => { clips[k] = prep(cl[i]); });
     mdl = { scene: m.scene, H: Math.max(0.5, box.max.y - box.min.y), clips, ch38 };
-    loadSiuu(hipsY);
+    loadSiuu(hipsY); loadClips(hipsY);
     if (ch38) {
       const src = {};
       m.scene.traverse(o => { if (o.isMesh) src[o.material.name] = o.material; });
@@ -3618,6 +3630,54 @@ function loadSiuu(hipsY) {
     }
     if (mdl) { mdl.clips.siuu = c; mdl.siuuPath = path; }
   }).catch(e => console.warn('Celebration load failed', e));
+}
+// Extra Mixamo clips (same rig as the others, prepared offline): walking, goalkeeper side-step and catch, getting up,
+// defeat, victory, dancing, seated clapping, a standing header, the roulette spin and the penalty kick.
+// The goalkeeper side-step only exists towards the player's left: the right one is its mirror image.
+function mirrorClip(c, name) {
+  const m = c.clone(); m.name = name;
+  for (const t of m.tracks) {
+    t.name = t.name.replace(/Left|Right/, s => s === 'Left' ? 'Right' : 'Left');
+    const v = t.values;
+    if (/\.quaternion$/.test(t.name)) for (let i = 0; i < v.length; i += 4) { v[i + 1] = -v[i + 1]; v[i + 2] = -v[i + 2]; }
+    else if (/\.position$/.test(t.name)) for (let i = 0; i < v.length; i += 3) v[i] = -v[i];
+  }
+  return m;
+}
+function loadClips(hipsY) {
+  if (location.protocol === 'file:') return;
+  fetch('anims/clips.json').then(r => r.ok ? r.json() : Promise.reject(r.status)).then(all => {
+    const k = hipsY / 0.93;
+    for (const key in all) {
+      const c = THREE.AnimationClip.parse(all[key]);
+      for (const t of c.tracks) if (/Hips\.position$/.test(t.name)) { const v = t.values; for (let i = 0; i < v.length; i += 3) { v[i] = 0; v[i + 1] *= k; v[i + 2] = 0; } }
+      if (mdl) mdl.clips[key] = c;
+    }
+    if (mdl && mdl.clips.gkSide) mdl.clips.gkSideR = mirrorClip(mdl.clips.gkSide, 'gkSideR');
+    buildBench();
+  }).catch(e => console.warn('Extra clips load failed', e));
+}
+// Substitutes sitting on both benches, clapping (PC only: eight more animated bodies)
+let benchModels = [];
+function buildBench() {
+  for (const b of benchModels) disposeModel(b.m);
+  benchModels = [];
+  if (!mdl || !mdl.clips.clap || isTouch || !renderer || venueNow() === 'entrainement') return;
+  [L / 2 - 16, L / 2 + 6].forEach((bx, t) => {
+    for (let i = 0; i < 4; i++) {
+      const sub = { t, role: 'MF', num: 12 + i + t * 5, ht: 0.95 + Math.random() * 0.1, hs: (Math.random() * 5) | 0,
+        skin: SKIN[(Math.random() * SKIN.length) | 0], hair: HAIR[(Math.random() * HAIR.length) | 0], boot: pickOf(BOOTS), st: null };
+      const m = makeModel(sub);
+      m.root.position.set(bx + 1.6 + i * 2.2 - L2, 0.3, W + 7.25 - W2); m.root.rotation.y = Math.PI;
+      const a = m.mixer.clipAction(mdl.clips.clap); a.play(); a.time = Math.random() * 5; a.timeScale = 0.9 + Math.random() * 0.2;
+      benchModels.push({ m });
+    }
+  });
+}
+function updateBench(dt) {
+  if (!benchModels.length) return;
+  const on = !!stadiumGrp && stadiumGrp.visible && !['menu'].includes(state);
+  for (const b of benchModels) { b.m.root.visible = on; if (on) b.m.mixer.update(dt); }
 }
 function numberTex(n, col, px) {
   const c = makeCanvas(64, 64), g = c.getContext('2d');
@@ -3711,13 +3771,13 @@ function disposeModel(m) {
 }
 function mAct(m, key) {
   let a = m.acts[key];
-  if (!a) { a = m.acts[key] = m.mixer.clipAction(mdl.clips[key]); if (!/^(idle|jog|run|back|strL|strR|gkIdle|fallen|win)$/.test(key)) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; } }
+  if (!a) { a = m.acts[key] = m.mixer.clipAction(mdl.clips[key]); if (!/^(idle|jog|run|back|strL|strR|gkIdle|fallen|win|walk|gkSide|gkSideR|dance|clap)$/.test(key)) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; } }
   return a;
 }
 // One strike / pass clip per kick; the foot meets the ball about 0.1 s after the chosen start time
-const KICK_EV = { throwIn: [1.25, 2.2], pass: [0.28, 1.1], kick: [0.25, 1.0] };
+const KICK_EV = { throwIn: [1.25, 2.2], pass: [0.28, 1.1], kick: [0.25, 1.0], penalty: [0.67, 1.45] };
 function modelKick(p, opts) {
-  p.kickKey = state === 'set' && setKind === 'throw' ? 'throwIn' : opts.target && !opts.shot ? 'pass' : 'kick';
+  p.kickKey = state === 'set' && setKind === 'throw' ? 'throwIn' : opts.target && !opts.shot ? 'pass' : p.mustPass && setKind === 'penalty' && mdl && mdl.clips.penalty ? 'penalty' : 'kick';
   p.kickT = time;
 }
 // What the body does this frame: a timed move (dive, slide, header...) or a blend of idle / jog / run / backwards / sideways
@@ -3732,12 +3792,30 @@ function modelMove(p, m, celebrate) {
     return [L ? 'diveL' : 'diveR', k < DIVE_FLY ? 0.93 + (land - 0.93) * k / DIVE_FLY : land + (end - land) * (k - DIVE_FLY) / (1 - DIVE_FLY)];
   }
   if (p.slide > 0) return ['tackle', 0.1 + (1 - p.slide / 0.38) * 1.2];
-  if (p.gkaT > 0 && GKA_CLIP[p.gka]) { const [key, a, b] = GKA_CLIP[p.gka], k = 1 - p.gkaT / p.gkaDur; return [key, a + (b - a) * k]; }
+  if (p.gkaT > 0 && GKA_CLIP[p.gka]) {
+    let [key, a, b] = GKA_CLIP[p.gka]; const k = 1 - p.gkaT / p.gkaDur;
+    // Keeper catches: the newer catch; headers on a ball at head height: the standing header (contact at 0.5 s)
+    if ((p.gka === 'catch' || p.gka === 'chest') && mdl.clips.gkCatch) [key, a, b] = ['gkCatch', 0.12, 0.8];
+    else if (p.gka === 'header' && p.lowHead && mdl.clips.header2) [key, a, b] = ['header2', 0.15, 0.95];
+    return [key, a + (b - a) * k];
+  }
   if (p.gkaT > 0 && p.gka === 'volley') return p.role === 'GK' ? ['drop', 1.6 + (1 - p.gkaT / p.gkaDur)] : ['kick', 0.2 + (1 - p.gkaT / p.gkaDur) * 0.8];
   if (p.jumpT > 0) return ['head', 0.45 + (1 - p.jumpT / 0.6) * 1.0];                  // wall jumping at a free kick
-  if (p.stun > 0 && m.stunBig) { const t = time - m.stunT; return t < 1.2 ? ['trip', t] : ['fallen', 0.5]; }
+  if (p.stun > 0 && m.stunBig) {
+    const t = time - m.stunT;
+    if (t < 1.2) return ['trip', t];
+    if (mdl.clips.getUp && p.stun < 1.4) return ['getUp', 0.35 + (1 - p.stun / 1.4) * 2.6];
+    return ['fallen', 0.5];
+  }
   if (p.siuuT != null && mdl.clips.siuu && time - p.siuuT < SIUU_DUR) return ['siuu', time - p.siuuT];
-  if (celebrate) return ['win', (performance.now() / 1000 * 0.9) % 8.4];
+  if (celebrate) return p.id % 2 && mdl.clips.victory ? ['victory', Math.min(time - goalTime, 4.4)] : ['win', (performance.now() / 1000 * 0.9) % 8.4];
+  if (state === 'goal' && p.t === concede && mdl.clips.defeat) return ['defeat', Math.min(time - goalTime + (p.id % 3) * 0.3, 4.6)];
+  if (state === 'end' && score[0] !== score[1]) {
+    const won = (score[0] > score[1] ? 0 : 1) === p.t;
+    if (won && mdl.clips.dance) return ['dance', (performance.now() / 1000 + p.id * 0.7) % 7.9];
+    if (!won && mdl.clips.defeat) return ['defeat', 4.6];
+  }
+  if (p.dmove && p.skillT > 0 && p.dmove.key === 'roulette' && mdl.clips.spin) return ['spin', 0.1 + (1 - p.skillT / p.dmove.dur) * 1.05];
   if (ball.held && ball.owner === p) return ['catch', 0.95];                           // keeper holding the ball against his chest
   if (state === 'set' && setKind === 'throw' && ball.owner === p) return ['throwIn', 1.0];
   if (p.kickKey && time - p.kickT < KICK_EV[p.kickKey][1] - KICK_EV[p.kickKey][0]) return [p.kickKey, KICK_EV[p.kickKey][0] + time - p.kickT];
@@ -3758,13 +3836,15 @@ function updateModel(p, m, x, y, dt, celebrate) {
   const tgt = { [p.role === 'GK' ? 'gkIdle' : 'idle']: 1 - mv };
   if (mv > 0) {
     const n = Math.abs(fw) + Math.abs(lf) || 1, f = Math.max(0, fw) / n, rs = clamp((sp - 3.5) / 3, 0, 1);
-    tgt.jog = mv * f * (1 - rs); tgt.run = mv * f * rs; tgt.back = mv * Math.max(0, -fw) / n; tgt.strL = mv * Math.max(0, lf) / n; tgt.strR = mv * Math.max(0, -lf) / n;
+    const wk = mdl.clips.walk ? 1 - clamp((sp - 1.5) / 1.3, 0, 1) : 0, gs = p.role === 'GK' && mdl.clips.gkSide && sp < 4.5;
+    tgt.walk = mv * f * wk * (1 - rs); tgt.jog = mv * f * (1 - wk) * (1 - rs); tgt.run = mv * f * rs; tgt.back = mv * Math.max(0, -fw) / n;
+    tgt[gs ? 'gkSide' : 'strL'] = mv * Math.max(0, lf) / n; tgt[gs ? 'gkSideR' : 'strR'] = mv * Math.max(0, -lf) / n;
   }
   for (const key of new Set([...Object.keys(tgt), ...Object.keys(m.loco)])) {
     const v = (m.loco[key] || 0) + ((tgt[key] || 0) - (m.loco[key] || 0)) * Math.min(1, dt * 8);
     if (v < 0.01 && !tgt[key]) delete m.loco[key]; else { m.loco[key] = v; W.push([key, v * (1 - m.ovW), undefined]); }
   }
-  const TS = { jog: 2.5, run: 5.5, back: 2.3, strL: 2.9, strR: 2.3 };
+  const TS = { walk: 1.4, jog: 2.5, run: 5.5, back: 2.3, strL: 2.9, strR: 2.3, gkSide: 2.1, gkSideR: 2.1 };
   const used = new Set();
   for (const [key, w, t] of W) {
     const a = mAct(m, key); used.add(key);
@@ -3776,7 +3856,7 @@ function updateModel(p, m, x, y, dt, celebrate) {
   for (const key of [...m.on]) if (!used.has(key)) { m.acts[key].stop(); m.on.delete(key); }
   m.mixer.update(dt);
   const dm = state === 'replay' ? p.dmRep : (p.dmove && p.skillT > 0 ? [p.dmove, 1 - p.skillT / p.dmove.dur, p.dribSide || 1] : null);
-  if (dm) applyDribbleBones(m, dm[0], dm[1], dm[2]);
+  if (dm && !(dm[0].key === 'roulette' && mdl.clips.spin)) applyDribbleBones(m, dm[0], dm[1], dm[2]);
 }
 // ---- Skill moves on the rigged body: the move's own animation (the same one that drives the classic figure) is layered
 // on top of the locomotion clips by rotating the bones in world space, around the player's forward and sideways axes ----
@@ -5321,9 +5401,33 @@ function cycleCam() {
 // ---- Match intro: a flight around the stadium, a dive to the centre circle, then the match camera takes over ----
 const INTRO_D = 17, INTRO_DIVE = [12.4, 15], INTRO_HAND = 15.8;
 // Walk-out timeline (s): out of the tunnel one by one, line-up along the halfway line, then off to the kick-off places
-const WALK_T = 3.0, WALK_GAP = 0.22, SPREAD = [7.4, 12.8], LINEUP_SHOW = [2.4, 9.8];
+const WALK_T = 5.2, WALK_GAP = 0.18, SPREAD = [7.6, 12.8], LINEUP_SHOW = [3.6, 10.4];
+// The balls flash by one after the other, slowing down, and stop on the one drawn for the match
+let reveal = null;
+function drawBall() {
+  ballPick = BALLS[(Math.random() * BALLS.length) | 0][0]; applyBall();
+  const seq = [];
+  let t = 0.15, dt = 0.07, i = (Math.random() * BALLS.length) | 0;
+  while (dt < 0.34) { seq.push([t, BALLS[i % BALLS.length][0]]); i++; t += dt; dt *= 1.16; }
+  // Land on the chosen ball
+  while (BALLS[i % BALLS.length][0] !== ballPick) { seq.push([t, BALLS[i % BALLS.length][0]]); i++; t += dt; }
+  seq.push([t, ballPick]);
+  return { seq, end: t, shown: null };
+}
+function updateReveal(t) {
+  const el = $('ballReveal');
+  if (!reveal || t > reveal.end + 1.6 || t >= INTRO_HAND) { if (!el.hidden) el.hidden = true; return; }
+  if (el.hidden) { el.hidden = false; el.classList.remove('final', 'out'); }
+  let cur = reveal.seq[0][1];
+  for (const [at, k] of reveal.seq) if (t >= at) cur = k;
+  if (cur !== reveal.shown) { reveal.shown = cur; el.querySelector('img').src = `balls/${cur}.png`; }
+  const fin = t >= reveal.end;
+  if (fin !== el.classList.contains('final')) { el.classList.toggle('final', fin); el.querySelector('.br-n').textContent = fin ? BALLS.find(b => b[0] === ballPick)[1] : ''; }
+  el.classList.toggle('out', t > reveal.end + 1.25);
+}
 function startIntro() {
   state = 'intro'; introT = 0; introA0 = Math.random() * Math.PI * 2;
+  reveal = drawBall();
   for (const p of players) { p.ix = p.x; p.iy = p.y; }
   introPlace(0, 0);
   const col = t => `<div class="lu${t ? ' r' : ''}"><h3 style="border-color:${TEAMS[t].color}"><small>${t ? 'EXTÉRIEUR' : 'DOMICILE'}</small>${escapeHtml(TEAMS[t].name)}</h3><ol>${
@@ -5337,7 +5441,7 @@ function introPlace(t, dt) {
     if (p.ix === undefined) continue;
     const r = p.i, sd = p.t === 0 ? -1 : 1;
     // Tunnel mouth between the dugouts on the near side, then a line facing the main stand
-    const sx = L / 2 + sd * 0.8, sy = W + 7 + r * 1.1, lx = L / 2 + sd * (1.6 + r * 1.15), ly = W - 9;
+    const sx = L / 2 + sd * 0.8, sy = W + 4.5 + r * 0.8, lx = L / 2 + sd * (1.6 + r * 1.15), ly = W - 4;
     let x, y;
     if (t < SPREAD[0]) {
       const w = sm(clamp((t - r * WALK_GAP) / WALK_T, 0, 1)), a = (1 - w) * (1 - w), b = 2 * w * (1 - w), c = w * w;
@@ -5353,13 +5457,14 @@ function introPlace(t, dt) {
     else if (t < SPREAD[0]) { p.fx = 0; p.fy = 1; }
     else { p.fx = TEAMS[p.t].dir; p.fy = 0; }
   }
+  updateReveal(t);
   for (const el of lineupsEl.querySelectorAll('.lu')) el.classList.toggle('on', t > LINEUP_SHOW[0] && t < LINEUP_SHOW[1]);
   if (t >= INTRO_HAND) lineupsEl.hidden = true;
 }
 let introT = 0, introA0 = 0, introPos = null, introLook = null, introQ = null, introV = null;
 function endIntro() {
   if (state !== 'intro') return;
-  lineupsEl.hidden = true;
+  lineupsEl.hidden = true; $('ballReveal').hidden = true; reveal = null;
   for (const p of players) p.ix = p.iy = undefined;
   kickoff(0);
   comment(`Les joueurs sont en place, ${TEAMS[0].name} donne le coup d’envoi !`, true);
@@ -5557,7 +5662,7 @@ function syncScene(dt) {
   stands.forEach(st => { st.userData.seat.position.y = 1.2 + 34 * Math.sin(0.6) / 2 + (excited ? Math.abs(Math.sin(now * 0.012 + st.userData.ph)) * 0.35 : 0); });
   boardTexs.forEach(t => { t.offset.x = (now * 0.00003) % 1; });
   updateWeather(dt); updateConfetti(dt); updateTrail(dt); updateAir(dt);
-  updateFans(dt, now); updateGrass(); updateWindChip(); updateNets(dt); updateSky(now);
+  updateFans(dt, now); updateBench(dt || 0); updateGrass(); updateWindChip(); updateNets(dt); updateSky(now);
   updateGoalFx(dt); updateSys(fxDirt, dt); updateSys(fxFire, dt);
 }
 let windChipT = 0;
@@ -5991,9 +6096,6 @@ function loadSettings() {
     if ([2.5, 4, 6, 10].includes(s.min)) matchMin = s.min;
     if (['surprise', 'clair', 'pluie', 'neige'].includes(s.weather)) weatherPick = s.weather;
     if (['jour', 'nuit'].includes(s.time)) timePick = s.time;
-    if (WINDS[s.wind]) windPick = s.wind;
-    if (['oui', 'non'].includes(s.grass)) grassPick = s.grass;
-    if (typeof s.voice === 'boolean') voiceOn = s.voice;
     if (typeof s.muted === 'boolean') muted = s.muted;
     if (['amical', 'coupe', 'etoiles', 'training'].includes(s.mode)) modePick = s.mode;
     if (DRILLS.some(d => d[0] === s.drill)) drillPick = s.drill;
@@ -6002,12 +6104,9 @@ function loadSettings() {
     if (Number.isInteger(s.defs) && s.defs >= 0 && s.defs <= 4) arenaDefs = s.defs;
     if (typeof s.myPick === 'string' && (s.myPick === 'perso' || CLUBS.includes(s.myPick) || ELITE.includes(s.myPick))) myPick = s.myPick;
     if (typeof s.oppPick === 'string' && (s.oppPick === 'hasard' || CLUBS.includes(s.oppPick) || ELITE.includes(s.oppPick))) oppPick = s.oppPick;
-    if (BALLS.some(b => b[0] === s.ball)) ballPick = s.ball;
     if (['stade', 'entrainement'].includes(s.venue)) venuePick = s.venue;
     // camV 2: saves made after the real camera became the default (older saves start on it too)
     if (s.camV === 2 && Number.isInteger(s.zoom) && s.zoom >= 0 && s.zoom < ZOOMS.length) zoomIdx = s.zoom;
-    if (['real', 'classic'].includes(s.look)) playerLook = s.look;
-    if (['auto', 'haute', 'eco'].includes(s.quality)) qualityPick = s.quality;
     if (['oui', 'non'].includes(s.assist)) assistPick = s.assist;
     if (s.myTeam && Array.isArray(s.myTeam.players) && s.myTeam.players.length === 11) s.myTeam.players.forEach((p, i) => normPlayer(p, FORM[i][2]));
     if (s.myTeam && Array.isArray(s.myTeam.players) && s.myTeam.players.length === 11 && s.myTeam.players.every(p => p && typeof p.name === 'string' && p.st && STAT_KEYS.every(k => p.st[k] >= 30 && p.st[k] <= 99))) myTeam = s.myTeam;
@@ -6333,7 +6432,7 @@ const MODES = [
 ];
 function menuState() {
   state = 'menu'; shootout = null; drill = null; setRainSound();
-  lineupsEl.hidden = true; tvStatsEl.hidden = true;
+  lineupsEl.hidden = true; tvStatsEl.hidden = true; $('ballReveal').hidden = true; reveal = null;
   if (chantGain && actx) chantGain.gain.setTargetAtTime(0, actx.currentTime, 0.5);
   commentEl.classList.remove('on');
   if ('speechSynthesis' in window) try { speechSynthesis.cancel(); } catch (e) { /* ignore */ }
@@ -6401,15 +6500,9 @@ function showOptions() {
     <div class="opt"><span>Difficulté</span>${seg('diff', Object.keys(DIFFS).map(k => [k, DIFFS[k].label]), diffKey)}</div>
     <div class="opt" id="rowDur"><span>Durée</span>${seg('dur', [[2.5, '2 min 30'], [4, '4 min'], [6, '6 min'], [10, '10 min']], matchMin)}</div>
     <div class="opt"><span>Météo</span>${seg('wx', [['surprise', 'Surprise'], ['clair', 'Clair'], ['pluie', 'Pluie'], ['neige', 'Neige']], weatherPick)}</div>
-    <div class="opt"><span>Vent</span>${seg('wind', Object.keys(WINDS).map(k => [k, WINDS[k].label]), windPick)}</div>
-    <div class="opt"><span>Joueurs</span>${seg('look', [['real', 'Réalistes'], ['classic', 'Classiques']], playerLook)}</div>
     <div class="opt" id="rowVenue"><span>Lieu</span>${seg('venue', [['stade', 'Stade'], ['entrainement', 'Entraînement']], venuePick)}</div>
-    <div class="opt"><span>Ballon</span>${seg('ball', BALLS, ballPick)}</div>
-    <div class="opt"><span>Qualité</span>${seg('q', [['auto', 'Auto'], ['haute', 'Haute'], ['eco', 'Économie']], qualityPick)}</div>
-    <div class="opt"><span>Herbe 3D</span>${seg('grass', [['oui', 'Oui'], ['non', 'Non']], grassPick)}</div>
     <div class="opt"><span>Horaire</span>${seg('time', [['jour', 'Jour'], ['nuit', 'Nocturne']], timePick)}</div>
     <div class="opt"><span>Défense assistée</span>${seg('assist', [['oui', 'Oui'], ['non', 'Non']], assistPick)}</div>
-    <div class="opt"><span>Commentateur</span>${seg('voice', [['1', 'Voix et texte'], ['0', 'Texte seul']], voiceOn ? '1' : '0')}</div>
     <details${isTouch ? '' : ' open'}><summary>Commandes</summary><div class="keys">${isTouch ? touchKeys : kbKeys}</div></details>
     <button class="cta" id="btnStart">Coup d’envoi</button>`;
   overlay.hidden = false;
@@ -6458,21 +6551,15 @@ function showOptions() {
   bindSeg('dur', v => { matchMin = +v; });
   bindSeg('wx', v => { weatherPick = v; preview(); });
   bindSeg('time', v => { timePick = v; preview(); });
-  bindSeg('wind', v => { windPick = v; setupWind(); });
-  bindSeg('grass', v => { grassPick = v; grassLight(); });
-  bindSeg('ball', v => { ballPick = v; applyBall(); });
   bindSeg('venue', v => { venuePick = v; preview(); });
-  bindSeg('look', v => { playerLook = v; });
   bindSeg('drill', v => { drillPick = v; });
   bindSeg('mates', v => { arenaMates = +v; });
   bindSeg('defs', v => { arenaDefs = +v; });
   $('selTaker').onchange = e => { drillTaker = +e.target.value; saveSettings(); };
-  bindSeg('q', v => { qualityPick = v; prScale = 1; applyQuality(); });
   $('selMy').onchange = e => { myPick = e.target.value; cup = null; ldc = null; if (oppName === myPick) oppName = pickOf(CLUBS.filter(n => n !== myPick)); saveSettings(); showOptions(); };
   $('selOpp').onchange = e => { oppPick = e.target.value; if (oppPick !== 'hasard') oppName = oppPick; saveSettings(); refresh(); };
   $('btnEdit').onclick = () => { myName = nameIn.value || myName; showTeamEditor(); };
   bindSeg('assist', v => { assistPick = v; });
-  bindSeg('voice', v => { voiceOn = v === '1'; syncToolIcons(); });
   card.querySelectorAll('[data-kit]').forEach(b => b.onclick = () => {
     const old = KITS.find(k => k.key === myKit);
     myKit = b.dataset.kit;
