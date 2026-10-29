@@ -146,6 +146,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #bThru{right:221px;bottom:79px;width:58px;height:58px;background:#bfe6ff;color:#0f2a5c;font-size:13px}
 #bTackle{right:149px;bottom:129px;width:62px;height:62px;background:#ff6b57;color:#ffffff}
 .pbtn.ready{box-shadow:0 0 0 4px rgba(255,255,255,.95),0 3px 0 rgba(0,0,0,.35)}
+/* Simplified pad: through balls are a swipe on Passe, volleys and bicycle kicks come from Tir, spin arrows are PC-only */
+#bThru,#bVolley,#bBike,.sarr{display:none!important}
+#bHead{right:221px;bottom:79px;width:62px;height:62px}
 #bSprint{right:42px;bottom:184px;width:56px;height:56px;background:rgba(10,22,15,.6);color:#f4f7f0;border:2px solid rgba(255,255,255,.45);font-size:15px}
 
 #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;
@@ -1446,7 +1449,7 @@ function shoot(p, power, aimOff, curl, sp, zh) {
     // The harder the strike, the higher the ball: a soft shot is rolled along the grass, a full-power one heads for the top
     // corners and, overhit, flies over the bar. A chosen zone sets the height, but overhitting still lifts it.
     const over = Math.max(0, power - 0.82);
-    let hz = zh != null ? zh + over * rnd(0, 3) : shotHeight(power) + over * rnd(0, 3.2);
+    let hz = zh != null ? zh + over * rnd(0, 1.2) : shotHeight(power) + over * rnd(0, 1.3);
     hz += gauss() * (q <= 1 ? 0.45 : 0.12) * (0.5 + power);
     // Launch angle that brings the ball to that height at the goal line (drag slows it, hence the 0.9)
     const Tz = dd / (v * 0.9);
@@ -1470,7 +1473,7 @@ function shoot(p, power, aimOff, curl, sp, zh) {
   if (!pen) comment(q === 3 ? `Frappe parfaite de ${p.name} !` : q === 0 ? pickOf([`${p.name} rate complètement sa frappe.`, `Frappe dévissée de ${p.name}.`]) : pickOf([`Frappe de ${p.name} !`, `${p.name} tente sa chance !`, `${p.name} déclenche !`]));
 }
 // Height at the goal line reached by a normal shot of this power (m): 0.15 rolled, ~0.9 at half power, ~2.2 under the bar at full power
-function shotHeight(power) { return 0.15 + Math.pow(clamp(power, 0, 1), 1.5) * 2.05; }
+function shotHeight(power) { return 0.15 + Math.pow(clamp(power, 0, 1), 1.5) * 1.75; }
 const heightLab = h => h < 0.4 ? 'ras de terre' : h < 1.1 ? 'à mi-hauteur' : h < 1.8 ? 'en hauteur' : h < 2.4 ? 'sous la barre' : 'au-dessus !';
 function chipShot(p, power, aimOff, sp) {
   const gx = oppGoalX(p.t) + TEAMS[p.t].dir * 0.3;
@@ -2126,7 +2129,7 @@ function aiTackles(dt) {
   const o = ball.owner;
   if (!o || ball.held || shootout) return;
   for (const p of players) {
-    if (p.t === o.t || (p === ctrl && !window.__auto) || p.cool > 0 || p.stun > 0 || p.wall) continue;
+    if (p.t === o.t || (p === ctrl && !window.__auto && !assistNow(p)) || p.cool > 0 || p.stun > 0 || p.wall) continue;
     if (p.role === 'GK' && !inOwnBox(p)) continue;
     const d = dist(p, o);
     if (d > 1.45) continue;
@@ -2429,6 +2432,11 @@ function getMode() {
   if (!ctrl) return 'changer';
   if (ball.owner === ctrl && !ball.held) return 'passe';
   return 'changer';
+}
+let assistPick = 'oui';
+function assistNow(p) {
+  return assistPick === 'oui' && state === 'play' && p.role !== 'GK' && idleT > 0.4 && getInput().m < 0.15
+    && (!ball.owner || ball.owner.t !== p.t) && !ball.held && p.slide <= 0 && p.stun <= 0 && !p.dmove && !p.aero && !p.wall;
 }
 function humanMove(p, dt) {
   const inp = getInput();
@@ -2775,8 +2783,10 @@ function pressPass() {
 }
 function releasePass() {
   if (act.passDown && act.passMode === 'passe' && canKick() && !(ctrl.mustPass && setKind === 'penalty')) {
-    startPlay(); humanPass(ctrl, act.passT);
+    startPlay();
+    if (act.passSwipe) humanThrough(ctrl); else humanPass(ctrl, isTouch ? 0 : act.passT);
   }
+  act.passSwipe = false;
   act.passDown = false; act.passMode = null;
 }
 function pressThru() {
@@ -2787,7 +2797,11 @@ function pressThru() {
 function releaseThru() { act.teamPress = false; }
 function pressShoot() {
   if (state === 'replay') { endReplay(); return; }
-  if (canKick()) { act.shootDown = true; act.shootT = 0; }
+  if (canKick()) { act.shootDown = true; act.shootT = 0; return; }
+  if (state === 'play' && ctrl && !ball.owner && ball.z > 0.25 && dist(ctrl, ball) < 9) {
+    const behind = (ball.vx * ctrl.fx + ball.vy * ctrl.fy) > 0 && ((ball.x - ctrl.x) * ctrl.fx + (ball.y - ctrl.y) * ctrl.fy) < 0.5;
+    pressAerial(ball.z > 1.55 && !behind ? 'header' : behind && ball.z > 0.9 ? 'bike' : 'volley');
+  }
 }
 function releaseShoot() {
   if (act.shootDown && canKick()) { startPlay(); humanShoot(ctrl, Math.min(1, act.shootT / 0.85)); }
@@ -3455,7 +3469,10 @@ function step(dt) {
     if (p.role === 'GK') p.landed = false;
     if (p.role === 'GK' && p.gkaT > 0 && p.gka !== 'throw' && p.gka !== 'volley') { const f = Math.exp(-dt * 6); p.vx *= f; p.vy *= f; continue; }
     if (p.dmove) { if (p.skillT > 0) { dribbleStep(p); continue; } endDribble(p); }
-    if (p === ctrl && live && !window.__auto) { humanMove(p, dt); continue; }
+    if (p === ctrl && live && !window.__auto) {
+      if (assistNow(p)) { idleT += dt; aiMove(p, dt); continue; }
+      humanMove(p, dt); continue;
+    }
     if (state === 'set' && p === ball.owner && !ball.held) { p.vx = p.vy = 0; continue; }
     aiMove(p, dt);
   }
@@ -5917,6 +5934,7 @@ function loadSettings() {
     if (s.camV === 2 && Number.isInteger(s.zoom) && s.zoom >= 0 && s.zoom < ZOOMS.length) zoomIdx = s.zoom;
     if (['real', 'classic'].includes(s.look)) playerLook = s.look;
     if (['auto', 'haute', 'eco'].includes(s.quality)) qualityPick = s.quality;
+    if (['oui', 'non'].includes(s.assist)) assistPick = s.assist;
     if (s.myTeam && Array.isArray(s.myTeam.players) && s.myTeam.players.length === 11) s.myTeam.players.forEach((p, i) => normPlayer(p, FORM[i][2]));
     if (s.myTeam && Array.isArray(s.myTeam.players) && s.myTeam.players.length === 11 && s.myTeam.players.every(p => p && typeof p.name === 'string' && p.st && STAT_KEYS.every(k => p.st[k] >= 30 && p.st[k] <= 99))) myTeam = s.myTeam;
     if (s.ldc && Array.isArray(s.ldc.group) && s.ldc.group.length === 4 && Array.isArray(s.ldc.koOpps) && ['groupe', 'ko'].includes(s.ldc.stage)) ldc = s.ldc;
@@ -5925,7 +5943,7 @@ function loadSettings() {
 }
 function saveSettings() {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ kit: myKit, name: myName, diff: diffKey, min: matchMin, weather: weatherPick, wind: windPick, grass: grassPick, time: timePick, voice: voiceOn, muted, mode: modePick, cup, ldc, myPick, oppPick, ball: ballPick, quality: qualityPick, zoom: zoomIdx, camV: 2, myTeam, venue: venuePick, look: playerLook, drill: drillPick, taker: drillTaker, mates: arenaMates, defs: arenaDefs }));
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ assist: assistPick, kit: myKit, name: myName, diff: diffKey, min: matchMin, weather: weatherPick, wind: windPick, grass: grassPick, time: timePick, voice: voiceOn, muted, mode: modePick, cup, ldc, myPick, oppPick, ball: ballPick, quality: qualityPick, zoom: zoomIdx, camV: 2, myTeam, venue: venuePick, look: playerLook, drill: drillPick, taker: drillTaker, mates: arenaMates, defs: arenaDefs }));
   } catch (e) { /* storage unavailable */ }
 }
 function syncToolIcons() {
@@ -6006,6 +6024,7 @@ function bindSpin(id, kind, down, up) {
   const b = $(id), arrows = [...document.querySelectorAll(`.sarr[data-for="${kind}"]`)];
   let pid = null;
   const setDir = e => {
+    if (isTouch) { act.spinDir[kind] = null; return; }
     const r = b.getBoundingClientRect(), R = r.width / 2;
     const dx = e.clientX - (r.left + R), dy = e.clientY - (r.top + R), d = Math.hypot(dx, dy);
     let dir = null;
@@ -6030,6 +6049,11 @@ function bindSpin(id, kind, down, up) {
   }
 }
 bindSpin('bPass', 'pass', pressPass, releasePass);
+(() => {
+  const b = $('bPass'); let sx = 0, sy = 0, id = null;
+  b.addEventListener('pointerdown', e => { id = e.pointerId; sx = e.clientX; sy = e.clientY; act.passSwipe = false; });
+  b.addEventListener('pointermove', e => { if (e.pointerId === id && Math.hypot(e.clientX - sx, e.clientY - sy) > 38) act.passSwipe = true; });
+})();
 bindSpin('bShoot', 'shoot', pressShoot, releaseShoot);
 bindBtn('bFoot', toggleFoot, () => {});
 // Shot zone picker: tap a zone of the little goal before shooting; tap it again for automatic aiming
@@ -6095,9 +6119,11 @@ const aeroBtns = ['bHead', 'bVolley', 'bBike'].map($);
 // The aerial buttons only appear when a ball in the air is coming near your player
 function updateAeroBtns() {
   // Always on screen during play; brighter when a ball in the air is within reach
+  // Only the header button, and only when a ball in the air is within reach
   const show = !!(isTouch && ctrl && (state === 'play' || state === 'set'));
   const near = show && !ball.owner && ball.z > 0.25 && dist(ctrl, ball) < 9;
-  for (const b of aeroBtns) { const want = show ? '' : 'none'; if (b.style.display !== want) b.style.display = want; b.classList.toggle('far', !near); }
+  const hb = $('bHead'), want = near ? '' : 'none';
+  if (hb.style.display !== want) hb.style.display = want;
 }
 bindBtn('bSprint', () => { act.sprint = true; }, () => { act.sprint = false; });
 replayChip.onclick = endReplay;
@@ -6259,12 +6285,11 @@ function showOptions() {
   oppName = oppPick !== 'hasard' ? oppPick : pickOf(CLUBS.filter(n => n !== myPick)); const oppSeed = (Math.random() * 100) | 0; oppKitKey = pickOppKit(oppSeed);
   const touchKeys = `
       <b>Pouce gauche</b><span>Courir dans n’importe quelle direction</span>
-      <b>Passe</b><span>Toucher pour une passe au sol, maintenir pour un centre ; sans ballon, change de joueur</span>
-      <b>Profondeur</b><span>Passe dans la course d’un attaquant ; sans ballon, un coéquipier vient presser</span>
-      <b>Tir</b><span>Maintenir pour charger, oriente le joystick pour viser</span>
-      <b>Tête · Volée · Retournée</b><span>Boutons jaunes toujours en bas de l’écran, plus vifs quand un ballon arrive en l’air ; au clavier E tête, R volée, U retournée</span>
+      <b>Passe</b><span>Toucher pour une passe au sol, glisser le doigt sur le bouton pour une passe en profondeur ; sans ballon, prend le joueur le plus proche du ballon</span>
+      <b>Tir</b><span>Maintenir pour charger : plus c’est long, plus c’est fort et haut ; oriente le joystick pour viser. Sur un ballon en l’air, Tir fait une volée, une retournée ou une tête</span>
+      <b>Tête</b><span>Bouton jaune qui apparaît quand un ballon aérien arrive</span>
+      <b>Défense assistée</b><span>Lâche le joystick quand l’adversaire a le ballon : ton joueur presse et tacle tout seul</span>
       <b>Zone de tir</b><span>Touche une case du petit but (en haut / en bas × gauche / centre / droite) avant de tirer ; au clavier 1-3 en haut, 4-6 en bas, 0 automatique</span>
-      <b>Flèches d’effet</b><span>Pose ou glisse le doigt sur une flèche autour de Tir ou Passe : ◀ ▶ enroulé, pour une passe ou un tir : ▲ lob, ▼ ras de terre, ◀ ▶ effet à gauche ou à droite</span>
       <b>Tacle</b><span>Sa chance de réussite (0 à 100 %) s’affiche au-dessus de ton joueur près du porteur</span>
       <b>Sprint + Tir</b><span>Lob par-dessus le gardien</span>
       <b>Dribble</b><span>Avec le ballon, le bouton Tacle devient Dribble : un geste au hasard parmi 31 (roulette, elastico, arc-en-ciel, Cuauhtemiña, otarie…), avec sa chance de réussite de 0 à 100 %</span>
@@ -6309,6 +6334,7 @@ function showOptions() {
     <div class="opt"><span>Qualité</span>${seg('q', [['auto', 'Auto'], ['haute', 'Haute'], ['eco', 'Économie']], qualityPick)}</div>
     <div class="opt"><span>Herbe 3D</span>${seg('grass', [['oui', 'Oui'], ['non', 'Non']], grassPick)}</div>
     <div class="opt"><span>Horaire</span>${seg('time', [['jour', 'Jour'], ['nuit', 'Nocturne']], timePick)}</div>
+    <div class="opt"><span>Défense assistée</span>${seg('assist', [['oui', 'Oui'], ['non', 'Non']], assistPick)}</div>
     <div class="opt"><span>Commentateur</span>${seg('voice', [['1', 'Voix et texte'], ['0', 'Texte seul']], voiceOn ? '1' : '0')}</div>
     <details${isTouch ? '' : ' open'}><summary>Commandes</summary><div class="keys">${isTouch ? touchKeys : kbKeys}</div></details>
     <button class="cta" id="btnStart">Coup d’envoi</button>`;
@@ -6371,6 +6397,7 @@ function showOptions() {
   $('selMy').onchange = e => { myPick = e.target.value; cup = null; ldc = null; if (oppName === myPick) oppName = pickOf(CLUBS.filter(n => n !== myPick)); saveSettings(); showOptions(); };
   $('selOpp').onchange = e => { oppPick = e.target.value; if (oppPick !== 'hasard') oppName = oppPick; saveSettings(); refresh(); };
   $('btnEdit').onclick = () => { myName = nameIn.value || myName; showTeamEditor(); };
+  bindSeg('assist', v => { assistPick = v; });
   bindSeg('voice', v => { voiceOn = v === '1'; syncToolIcons(); });
   card.querySelectorAll('[data-kit]').forEach(b => b.onclick = () => {
     const old = KITS.find(k => k.key === myKit);
