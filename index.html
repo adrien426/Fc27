@@ -734,7 +734,7 @@ let oppName = CLUBS[0], oppKitKey = 'bleu', weatherPick = 'surprise', wx = 'clai
 let modePick = 'amical', matchMode = 'amical', cup = null, ldc = null, WX = WEATHERS.clair;
 let venuePick = 'stade', drill = null, drillPick = 'freekick', drillTaker = -1, arenaMates = 0, arenaDefs = 0;
 const venueNow = () => matchMode === 'etoiles' ? 'stade' : matchMode === 'training' ? 'entrainement' : venuePick;
-let myPick = 'perso', oppPick = 'hasard', myTeam = null, ballPick = 'classique', qualityPick = 'auto';
+let myPick = 'perso', oppPick = 'hasard', myTeam = null, ballPick = 'euro', qualityPick = 'auto';
 function defaultMyTeam() { return { players: genRoster(72, 'perso' + Math.random()) }; }
 function myRoster() {
   if (myPick !== 'perso' && (CLUBS.includes(myPick) || ELITE.includes(myPick))) return genRoster(clubOvr(myPick), myPick);
@@ -3025,6 +3025,12 @@ function goal(team) {
   comment(line, true, true);
   if (lastGoalShot && lastGoalShot.xg < 0.15) setTimeout(() => comment(`Il n’avait que ${Math.round(lastGoalShot.xg * 100)} % de chances de marquer !`, true), 1800);
   crowdSwell(team === 0 ? 1 : 0.55, 3.4); whistle(0.5);
+  for (const q of players) q.siuuT = null;
+  if (!og && sc && mdl && mdl.clips.siuu && playerLook === 'real') {
+    const dx = L / 2 - sc.x, dy = W / 2 - sc.y, d = Math.hypot(dx, dy) || 1;
+    sc.fx = dx / d; sc.fy = dy / d; sc.vx = sc.vy = 0; sc.siuuT = time; sc.sx = sc.x; sc.sy = sc.y;
+    goalT = SIUU_DUR + 0.5; actCam = { p: sc, t: goalT };
+  }
   if (team === 0) { sfxRoar(); buzz([60, 40, 140]); } else sfxOoh();
   spawnConfetti(ball.x < L / 2 ? 0 : L, TEAMS[team].color, TEAMS[team].shorts);
   shakeT = team === 0 ? 0.7 : 0.35;
@@ -3468,6 +3474,17 @@ function step(dt) {
     }
     if (p.role === 'GK') p.landed = false;
     if (p.role === 'GK' && p.gkaT > 0 && p.gka !== 'throw' && p.gka !== 'volley') { const f = Math.exp(-dt * 6); p.vx *= f; p.vy *= f; continue; }
+    if (p.siuuT != null && time - p.siuuT < SIUU_DUR) {
+      p.vx = p.vy = 0;
+      const P = mdl && mdl.siuuPath, st = time - p.siuuT;
+      if (P) {
+        let i = 0; while (i < P.t.length - 2 && P.t[i + 1] < st) i++;
+        const a = clamp((st - P.t[i]) / ((P.t[i + 1] - P.t[i]) || 1), 0, 1), lx = P.x[i] + (P.x[i + 1] - P.x[i]) * a, lz = P.z[i] + (P.z[i + 1] - P.z[i]) * a;
+        // Model space: +z is where the player faces, +x is his left
+        p.x = p.sx + lx * p.fy + lz * p.fx; p.y = p.sy - lx * p.fx + lz * p.fy;
+      }
+      continue;
+    }
     if (p.dmove) { if (p.skillT > 0) { dribbleStep(p); continue; } endDribble(p); }
     if (p === ctrl && live && !window.__auto) {
       if (assistNow(p)) { idleT += dt; aiMove(p, dt); continue; }
@@ -3573,6 +3590,7 @@ function loadModels() {
     const box = new THREE.Box3().setFromObject(m.scene), clips = {};
     MDL_KEYS.forEach((k, i) => { clips[k] = prep(cl[i]); });
     mdl = { scene: m.scene, H: Math.max(0.5, box.max.y - box.min.y), clips, ch38 };
+    loadSiuu(hipsY);
     if (ch38) {
       const src = {};
       m.scene.traverse(o => { if (o.isMesh) src[o.material.name] = o.material; });
@@ -3583,6 +3601,23 @@ function loadModels() {
     }
     splashReady();
   }).catch(e => { console.warn('Model load failed', e); mdl = null; splashReady(); });
+}
+// Retargeted onto the Mixamo skeleton offline; the run-up starts where the player stands (hips travel made relative to frame 0)
+// and the hip height is scaled to the body in use.
+const SIUU_DUR = 2.95;
+function loadSiuu(hipsY) {
+  if (location.protocol === 'file:') return;
+  fetch('anims/siuu.json').then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
+    const c = THREE.AnimationClip.parse(j), k = hipsY / 0.928;
+    // The run-up moves the player himself (marker, camera and all): the travel becomes a path, the clip keeps only the height
+    let path = null;
+    for (const t of c.tracks) if (/Hips\.position$/.test(t.name)) {
+      const v = t.values, x0 = v[0], z0 = v[2], n = v.length / 3;
+      path = { t: Array.from(t.times), x: new Float32Array(n), z: new Float32Array(n) };
+      for (let i = 0; i < n; i++) { path.x[i] = (v[i * 3] - x0) * k; path.z[i] = (v[i * 3 + 2] - z0) * k; v[i * 3] = 0; v[i * 3 + 1] *= k; v[i * 3 + 2] = 0; }
+    }
+    if (mdl) { mdl.clips.siuu = c; mdl.siuuPath = path; }
+  }).catch(e => console.warn('Celebration load failed', e));
 }
 function numberTex(n, col, px) {
   const c = makeCanvas(64, 64), g = c.getContext('2d');
@@ -3701,6 +3736,7 @@ function modelMove(p, m, celebrate) {
   if (p.gkaT > 0 && p.gka === 'volley') return p.role === 'GK' ? ['drop', 1.6 + (1 - p.gkaT / p.gkaDur)] : ['kick', 0.2 + (1 - p.gkaT / p.gkaDur) * 0.8];
   if (p.jumpT > 0) return ['head', 0.45 + (1 - p.jumpT / 0.6) * 1.0];                  // wall jumping at a free kick
   if (p.stun > 0 && m.stunBig) { const t = time - m.stunT; return t < 1.2 ? ['trip', t] : ['fallen', 0.5]; }
+  if (p.siuuT != null && mdl.clips.siuu && time - p.siuuT < SIUU_DUR) return ['siuu', time - p.siuuT];
   if (celebrate) return ['win', (performance.now() / 1000 * 0.9) % 8.4];
   if (ball.held && ball.owner === p) return ['catch', 0.95];                           // keeper holding the ball against his chest
   if (state === 'set' && setKind === 'throw' && ball.owner === p) return ['throwIn', 1.0];
@@ -4587,10 +4623,10 @@ function updateSky(now) {
   if (skyMesh) skyMesh.position.copy(camera.position);
   if (starPts) starPts.position.copy(camera.position);
 }
-const BALLS = [['classique', 'Classique'], ['pro', 'Pro'], ['retro', 'Rétro'], ['hiver', 'Hiver'], ['etoiles', 'Étoiles']];
+const BALLS = [['euro', 'Euro 2020'], ['classique', 'Classique'], ['etoiles', 'Étoiles'], ['jabu', 'Jabu'], ['brazu', 'Brazu']];
 const ballTexs = {};
 function ballTexture(kind) {
-  kind = kind || 'classique';
+  kind = ['classique', 'etoiles'].includes(kind) ? kind : 'classique';
   if (ballTexs[kind]) return ballTexs[kind];
   const c = makeCanvas(512, 256), g = c.getContext('2d');
   const poly = (x, y, r, n, col, rot) => { g.fillStyle = col; g.beginPath(); for (let i = 0; i < n; i++) { const a = i * Math.PI * 2 / n + (rot || -1.57); g.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r * 0.92); } g.closePath(); g.fill(); };
@@ -4632,8 +4668,34 @@ function ballTexture(kind) {
   const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
   return (ballTexs[kind] = t);
 }
+// Ball models (balls.glb, next to the page): one node per ball, each scaled to the game's ball radius and centred.
+// Until they load, or without them, the painted sphere is shown.
+const ballModels = {};
+function loadBalls() {
+  if (!THREE.GLTFLoader || location.protocol === 'file:') return;
+  const ld = new THREE.GLTFLoader();
+  if (THREE.DRACOLoader) { const dr = new THREE.DRACOLoader(); dr.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/gltf/'); ld.setDRACOLoader(dr); }
+  ld.load('balls.glb', g => {
+    for (const b of g.scene.children.slice()) {
+      const box = new THREE.Box3().setFromObject(b), c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+      const holder = new THREE.Group(); b.position.sub(c); holder.add(b); holder.scale.setScalar(2 * BR / Math.max(sz.x, sz.y, sz.z));
+      b.traverse(o => {
+        if (!o.isMesh) return;
+        const m = o.material; o.castShadow = true;
+        o.material = new THREE.MeshPhongMaterial({ map: m.map || null, color: m.map && b.name === 'euro' ? new THREE.Color(1.2, 1.2, 1.2) : m.color, shininess: 40, specular: new THREE.Color('#333333') });
+        m.dispose();
+      });
+      ballModels[b.name] = holder;
+    }
+    applyBall();
+  }, undefined, e => console.warn('Ball models load failed', e));
+}
 function applyBall() {
   if (!ballMesh) return;
+  for (const k in ballModels) ballMesh.remove(ballModels[k]);
+  const bm = ballModels[ballPick];
+  if (bm) { ballMesh.add(bm); ballMesh.material.visible = false; ballMesh.castShadow = false; return; }
+  ballMesh.material.visible = true; ballMesh.castShadow = true;
   ballMesh.material.map = ballTexture(ballPick); ballMesh.material.needsUpdate = true;
 }
 function numMat(num, jersey) {
@@ -4932,7 +4994,7 @@ function init3D() {
   buildBoards(); buildPitchside();
   scene.children.filter(o => !before.has(o)).forEach(o => stadiumGrp.add(o));
   loadStadium();
-  buildGrass(); buildGoals(); buildFlags(); buildBackdrop(); buildTraining(); buildAir(); applyVenue(); loadModels();
+  buildGrass(); buildGoals(); buildFlags(); buildBackdrop(); buildTraining(); buildAir(); applyVenue(); loadModels(); loadBalls();
   ballMesh = new THREE.Mesh(new THREE.SphereGeometry(BR, 24, 16), new THREE.MeshPhongMaterial({ map: ballTexture(ballPick), shininess: 40, specular: new THREE.Color('#333333') }));
   ballMesh.castShadow = true; scene.add(ballMesh);
   ballBlob = new THREE.Mesh(new THREE.CircleGeometry(BR * 1.3, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false }));
@@ -5343,6 +5405,18 @@ function updateCam(dt) {
     if (camera.fov !== f) { camera.fov = f; camera.updateProjectionMatrix(); }
     return;
   }
+  // Goal celebration: a close camera on the scorer while he does his "Siuuu"
+  const cp = state === 'goal' && actCam && actCam.p.siuuT != null && time - actCam.p.siuuT < SIUU_DUR + 0.5 ? actCam.p : null;
+  if (cp) {
+    if (!introLook) { introPos = new THREE.Vector3(); introLook = new THREE.Vector3(); introQ = new THREE.Quaternion(); introV = new THREE.Vector3(); }
+    // Side-on and a little behind the start: the run is seen in profile and the spin lands him facing the camera
+    const tx = (cp.sx ?? cp.x) - cp.fx * 1.5 - cp.fy * 8, ty = (cp.sy ?? cp.y) - cp.fy * 1.5 + cp.fx * 8, k = 1 - Math.exp(-dt * 3.2);
+    camera.position.lerp(tmpV.set(tx - L2, 2.1, ty - W2), k);
+    introLook.lerp(tmpV.set(cp.x - L2, 1.05, cp.y - W2), 1 - Math.exp(-dt * 8));
+    const fov = portrait ? 58 : 34; if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+    camera.lookAt(introLook);
+    return;
+  }
   updateMatchCam(dt);
 }
 function updateMatchCam(dt) {
@@ -5381,8 +5455,8 @@ function updateMatchCam(dt) {
   }
   let tx = ball.x, ty = ball.y; const o = ball.owner;
   if (o) { tx += o.vx * 0.6; ty += o.vy * 0.3; } else { tx += ball.vx * 0.3; ty += ball.vy * 0.15; }
-  if (actCam) { actCam.t -= dt; if (actCam.t <= 0 || !players.includes(actCam.p) || state !== 'play') actCam = null; }
-  if (actCam) { tx = (actCam.p.x * 2 + ball.x) / 3; ty = (actCam.p.y * 2 + ball.y) / 3; }
+  if (actCam) { actCam.t -= dt; if (actCam.t <= 0 || !players.includes(actCam.p) || (state !== 'play' && state !== 'goal')) actCam = null; }
+  if (actCam) { const w = state === 'goal' ? 1 : 2 / 3; tx = actCam.p.x * w + ball.x * (1 - w); ty = actCam.p.y * w + ball.y * (1 - w); }   // a celebrating scorer is framed alone
   camZf += ((actCam ? 0.62 : 1) - camZf) * (1 - Math.exp(-dt * 4));
   tx = clamp(tx, 4, L - 4); ty = clamp(ty, 3, W - 3);
   const k = 1 - Math.exp(-dt * (actCam ? 5 : state === 'replay' ? 4 : 2.6));
