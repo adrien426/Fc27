@@ -64,6 +64,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   border-left:4px solid var(--gold);border-radius:3px;padding:5px 10px 6px;font-weight:500;font-size:17px;line-height:1.15;pointer-events:none;
   opacity:0;transform:translateY(-4px);transition:opacity .25s,transform .25s}
 #comment.on{opacity:1;transform:none}
+#keyHint{position:absolute;left:calc(12px + env(safe-area-inset-left,0px));bottom:12px;display:grid;grid-template-columns:auto auto;gap:4px 10px;align-items:center;
+  background:var(--hud-bg);color:var(--hud-ink);border-radius:4px;padding:8px 12px;font-size:16px;font-weight:600;pointer-events:none;opacity:.85}
+#keyHint[hidden]{display:none}
+#keyHint kbd{justify-self:end;font-family:var(--font);font-weight:800;font-size:15px;color:#13241a;background:var(--hud-ink);border-radius:3px;padding:1px 7px;box-shadow:0 2px 0 rgba(0,0,0,.4)}
 #touch{position:absolute;inset:0;pointer-events:none;display:none}
 .touch #touch{display:block}
 #joyZone{position:absolute;left:0;bottom:0;width:50%;height:70%;pointer-events:auto}
@@ -269,6 +273,7 @@ select.name{width:230px;cursor:pointer}
     </div>
   </div>
   <div id="comment" aria-live="polite"></div>
+  <div id="keyHint" hidden><kbd>ZQSD / ↑↓←→</kbd><span>Courir</span><kbd>J</kbd><span>Passe</span><kbd>K</kbd><span>Tir</span><kbd>Espace</kbd><span>Tacle</span><kbd>Maj</kbd><span>Sprint</span></div>
   <div id="banner"><span class="main"></span><span class="sub"></span></div>
   <button id="replay" aria-label="Passer le ralenti">Ralenti ⏭</button>
   <div id="touch">
@@ -5122,7 +5127,7 @@ function endIntro() {
   kickoff(0);
   comment(`Les joueurs sont en place, ${TEAMS[0].name} donne le coup d’envoi !`, true);
 }
-function skipIntro() { if (state === 'intro' && introT < INTRO_HAND) introT = INTRO_HAND; }
+function skipIntro() { if (state === 'intro' && introT < INTRO_HAND) { introT = INTRO_HAND; msgT = Math.min(msgT, 0.01); } }
 function introPose(t, pos, look) {
   const sm = (a, b, x) => { const k = clamp((x - a) / (b - a), 0, 1); return k * k * (3 - 2 * k); };
   // Orbit: starts outside above the roof, moves in over the stands, then sinks into the bowl
@@ -6145,6 +6150,7 @@ function showOptions() {
 let lastT = performance.now(), acc = 0, renderAlpha = 1;
 function savePrev() { for (const p of players) { p.px = p.x; p.py = p.y; } ball.px = ball.x; ball.py = ball.y; ball.pz = ball.z; }
 const STEP = 1 / 120;
+const keyHint = $('keyHint');
 function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   pollGamepad();
@@ -6162,6 +6168,8 @@ function frame(now) {
   if (msgT > 0 && state !== 'pause') { msgT -= dt; if (msgT <= 0) { banner.classList.remove('show'); banner.classList.add('hide'); } }
   if (state === 'replay' || state === 'menu') renderAlpha = 1;
   trackFps(dt);
+  const kh = isTouch || ['menu', 'end', 'pause', 'replay'].includes(state);
+  if (keyHint.hidden !== kh) keyHint.hidden = kh;
   if (players.length) updateCam(dt);
   render(dt);
   requestAnimationFrame(frame);
