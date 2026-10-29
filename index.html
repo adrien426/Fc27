@@ -3463,11 +3463,25 @@ const MDL_KEYS = ['idle', 'jog', 'run', 'back', 'strL', 'strR', 'gkIdle', 'kick'
 const GKA_CLIP = { header: ['head', 0.45, 1.5], bike: ['scissor', 0.55, 2.2], scorpion: ['scissor', 0.55, 2.2], catch: ['catch', 0.3, 0.97], chest: ['catch', 0.3, 0.97],
   block: ['block', 0.35, 1.6], kblock: ['block', 0.35, 1.6], star: ['block', 0.35, 1.6], foot: ['block2', 0.4, 1.4], throw: ['throw', 1.1, 2.2], kneel: ['scoop', 0.4, 1.8],
   jump: ['catch4', 0.5, 1.4], punch: ['catch4', 0.55, 1.3], tip: ['miss', 0.45, 1.3], backtip: ['miss', 0.45, 1.3] };
+// Player body: the Mixamo "Ch38" footballer (player.glb, next to the page) when it loads, else the embedded X Bot.
+// Both share the Mixamo skeleton, so the same clips drive either one.
+function loadPlayerBody(ld) {
+  return new Promise(res => {
+    if (location.protocol === 'file:') { res(null); return; }
+    ld.load('player.glb', res, undefined, e => { console.warn('Player model load failed', e); res(null); });
+  });
+}
 function loadModels() {
   if (!THREE.GLTFLoader || !THREE.SkeletonUtils || !document.getElementById('mdl-xbot')) { splashReady(); return; }
   const ld = new THREE.GLTFLoader();
+  if (THREE.DRACOLoader) {
+    const dr = new THREE.DRACOLoader(); dr.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/gltf/'); ld.setDRACOLoader(dr);
+  }
   const parse = id => new Promise((res, rej) => ld.parse(b64buf(id), '', res, rej));
-  Promise.all(['xbot', ...MDL_KEYS].map(k => parse('mdl-' + k))).then(([m, ...cl]) => {
+  Promise.all([loadPlayerBody(ld), ...['xbot', ...MDL_KEYS].map(k => parse('mdl-' + k))]).then(([body, xb, ...cl]) => {
+    const m = body || xb, ch38 = !!body;
+    // Bone names must match the clips' "mixamorig" prefix (this export numbers it: mixamorig5)
+    if (ch38) m.scene.traverse(o => { if (o.isBone) o.name = o.name.replace(/^mixamorig\d*/, 'mixamorig'); });
     let hipsY = 1.04;
     m.scene.traverse(o => { if (o.isBone && /Hips$/.test(o.name)) hipsY = o.position.y; });
     // Clips come from another rig export: rename bones, keep the body in place (the game moves it), scale hip height to this body
@@ -3482,13 +3496,21 @@ function loadModels() {
     };
     const box = new THREE.Box3().setFromObject(m.scene), clips = {};
     MDL_KEYS.forEach((k, i) => { clips[k] = prep(cl[i]); });
-    mdl = { scene: m.scene, H: Math.max(0.5, box.max.y - box.min.y), clips };
+    mdl = { scene: m.scene, H: Math.max(0.5, box.max.y - box.min.y), clips, ch38 };
+    if (ch38) {
+      const src = {};
+      m.scene.traverse(o => { if (o.isMesh) src[o.material.name] = o.material; });
+      const bodyMap = src.Ch38_body && src.Ch38_body.map, hairMap = src.Ch38_hair && src.Ch38_hair.map;
+      mdl.bodyMap = bodyMap;
+      mdl.skinMat = new THREE.MeshLambertMaterial({ map: bodyMap, skinning: true });
+      mdl.hairMat = new THREE.MeshLambertMaterial({ map: hairMap, skinning: true, alphaTest: 0.4, side: THREE.DoubleSide });
+    }
     splashReady();
   }).catch(e => { console.warn('Model load failed', e); mdl = null; splashReady(); });
 }
-function numberTex(n, col) {
+function numberTex(n, col, px) {
   const c = makeCanvas(64, 64), g = c.getContext('2d');
-  g.font = '800 46px "Barlow Condensed", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `800 ${px || 46}px "Barlow Condensed", Arial, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = 5; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.strokeText(String(n), 32, 35); g.fillStyle = col; g.fillText(String(n), 32, 35);
   const t = new THREE.CanvasTexture(c); t.anisotropy = 2; return t;
 }
@@ -3524,20 +3546,40 @@ function kitMat(p) {
   };
   return mat;
 }
+// Ch38 kit: its white shirt, shorts and socks are tinted with the team colours (the texture is ~0.76 grey, hence the boost);
+// the shirt's baked number was erased from the texture and the player's own number is drawn in that spot of the UV layout.
+const CH38_NUM = [0.522, 0.70, 0.583, 0.818];
+function ch38Mats(p) {
+  const k = kitOf(p), lum = c => { const v = new THREE.Color(c); return v.r * 0.3 + v.g * 0.59 + v.b * 0.11; };
+  const tint = c => new THREE.MeshLambertMaterial({ map: mdl.bodyMap, skinning: true, color: new THREE.Color(c).multiplyScalar(1.3) });
+  const shirt = tint(k.jersey), num = numberTex(p.num || 7, lum(k.jersey) > 0.6 ? '#1b1b1b' : '#ffffff', 62), [u0, v0, u1, v1] = CH38_NUM;
+  shirt.userData.numTex = num;
+  shirt.onBeforeCompile = sh => {
+    sh.uniforms.uNum = { value: num };
+    sh.fragmentShader = 'uniform sampler2D uNum;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      vec2 nq = (vUv - vec2(${u0}, ${v0})) / vec2(${(u1 - u0).toFixed(3)}, ${(v1 - v0).toFixed(3)});
+      if (nq.x > 0.0 && nq.x < 1.0 && nq.y > 0.0 && nq.y < 1.0) { vec4 nt = texture2D(uNum, vec2(nq.x, 1.0 - nq.y)); diffuseColor.rgb = mix(diffuseColor.rgb, nt.rgb, nt.a); }`);
+  };
+  shirt.customProgramCacheKey = () => 'ch38-shirt';
+  return { Ch38_Shirt: shirt, Ch38_Shorts: tint(k.shorts), Ch38_Socks: tint(k.socks) };
+}
 function makeModel(p) {
-  const root = THREE.SkeletonUtils.clone(mdl.scene), mat = kitMat(p);
-  root.traverse(o => { if (!o.isMesh) return; o.castShadow = qualityPick !== 'eco'; o.frustumCulled = false; o.material = mat; });
+  const root = THREE.SkeletonUtils.clone(mdl.scene), kit = mdl.ch38 ? ch38Mats(p) : null, mat = kit ? kit.Ch38_Shirt : kitMat(p);
+  root.traverse(o => {
+    if (!o.isMesh) return; o.castShadow = qualityPick !== 'eco'; o.frustumCulled = false;
+    o.material = !kit ? mat : kit[o.name] || (/Hair|Eyelash/.test(o.name) ? mdl.hairMat : mdl.skinMat);
+  });
   root.scale.setScalar(1.8 * (p.ht || 1) / mdl.H);
   scene.add(root);
   const bones = {};
   root.traverse(o => { if (o.isBone) { const k = o.name.replace(/^mixamorig\d*:?/, ''); if (!bones[k]) bones[k] = o; } });
-  return { root, mat, bones, mixer: new THREE.AnimationMixer(root), acts: {}, on: new Set(), loco: {}, ovW: 0, last: null, stun0: 0, stunT: -9, stunBig: false, acc: 0, tick: 0 };
+  return { root, mat, mats: kit ? Object.values(kit) : [mat], bones, mixer: new THREE.AnimationMixer(root), acts: {}, on: new Set(), loco: {}, ovW: 0, last: null, stun0: 0, stunT: -9, stunBig: false, acc: 0, tick: 0 };
 }
 // The skeleton geometry is shared with the source model: only the per-player material and number texture are freed
 function disposeModel(m) {
   scene.remove(m.root);
   m.mixer.stopAllAction(); m.mixer.uncacheRoot(m.root);
-  if (m.mat) { if (m.mat.userData.numTex) m.mat.userData.numTex.dispose(); m.mat.dispose(); }
+  for (const mt of m.mats || []) { if (mt.userData.numTex) mt.userData.numTex.dispose(); mt.dispose(); }
 }
 function mAct(m, key) {
   let a = m.acts[key];
