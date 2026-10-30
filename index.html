@@ -271,7 +271,6 @@ select.name{width:230px;cursor:pointer}
 .netwait .spin{width:58px;height:58px;border-radius:50%;border:6px solid var(--line);border-top-color:var(--cta);animation:netspin 1s linear infinite}
 .netwait b{font-size:24px;font-weight:800}.netwait span{font-size:17px;color:var(--muted)}
 @keyframes netspin{to{transform:rotate(360deg)}}
-.apw{position:absolute;left:7px;right:7px;bottom:5px;height:5px;border-radius:3px;pointer-events:none;background:linear-gradient(90deg,#ffd23f var(--w,0%),rgba(0,0,0,.35) 0)}
 @media (prefers-reduced-motion:reduce){.netwait .spin{animation-duration:3s}}
 .mcard{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;border:2px solid var(--line);border-radius:8px;background:var(--chip);color:var(--ink);
   font-family:var(--font);padding:16px 14px 18px;cursor:pointer;transition:transform .12s,border-color .12s}
@@ -828,7 +827,7 @@ const inOwnBox = p => inBoxOf(p.t, p.x, p.y);
 const $ = id => document.getElementById(id);
 const app = $('app'), canvas = $('c'), hud2 = $('hud2'), ctx = hud2.getContext('2d');
 const banner = $('banner'), overlay = $('overlay'), card = $('card'), replayChip = $('replay');
-let lastGoalShot = null, lastShot = null, lastShotT = -99;
+let lastGoalShot = null;
 const shotInfo = document.createElement('div'); shotInfo.id = 'shotInfo'; shotInfo.setAttribute('aria-live', 'polite'); document.body.appendChild(shotInfo);
 const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 if (isTouch) app.classList.add('touch');
@@ -871,7 +870,7 @@ function makePlayers() {
       pace: (0.86 + (st.vit + (tb.vit || 0) - 40) / 59 * 0.28) * (role === 'GK' ? 0.95 : 1),
       skill: clamp(roleOvr(role, st) / 100, 0.35, 0.99), ovr: Math.round(roleOvr(role, st)),
       hair: HAIR[(Math.random() * HAIR.length) | 0], skin: SKIN[(Math.random() * SKIN.length) | 0],
-      ht: clamp(rp.cm / 180, 0.85, 1.16), hs: (Math.random() * 5) | 0, beard: Math.random() < 0.22, boot: pickOf(BOOTS)
+      ht: clamp(rp.cm / 180, 0.9, 1.12), hs: (Math.random() * 5) | 0, beard: Math.random() < 0.22, boot: pickOf(BOOTS)
     });
   });
   setSides();
@@ -1156,7 +1155,7 @@ function gkCanReach(p, d) {
   return along > -0.95 && along < arm && perp < 0.7;
 }
 function gkReach(p) {
-  if (p.dive > 0) return 1.7 + p.diveLift * 0.3 + (p.diveBonus ? 0.35 : 0) + tv(p, 'envergure') * 0.12 + ((p.cm || 187) - 187) / 100 * 0.6;
+  if (p.dive > 0) return 1.7 + p.diveLift * 0.3 + (p.diveBonus ? 0.35 : 0) + tv(p, 'envergure') * 0.12;
   if (p.gkaT > 0 && p.gka === 'star') return 1.75;
   return 1.05;
 }
@@ -1860,92 +1859,51 @@ function pressAerial(type) {
   if (netFwd('pressAerial', type)) return;
   if (state === 'replay') { endReplay(); return; }
   const p = ctrl;
-  if (state !== 'play' || !p) return;
-  if (p.aero) {
-    // Every extra tap on the same button before contact adds power (6 taps = full power)
-    if (p.aero.type === type && p.aero.taps < AERO_TAPS) { p.aero.taps++; p.aero.t = Math.min(1.15, p.aero.t + 0.1); if (!rin) aeroGauge(type, p.aero.taps); buzz(12); }
-    return;
-  }
-  if (p.stun > 0 || p.slide > 0 || ball.owner === p || ball.held) return;
-  p.aero = { type, t: 0.75, taps: 1 }; p.lowHead = type === 'header' && ball.z < 2.0;
-  if (!rin) aeroGauge(type, 1);
+  if (state !== 'play' || !p || p.aero || p.stun > 0 || p.slide > 0 || ball.owner === p || ball.held) return;
+  p.aero = { type, t: 0.75 }; p.lowHead = type === 'header' && ball.z < 2.0;
   gkAction(p, type === 'volley' ? 'volley' : type);
   idleT = 0;
 }
-const AERO_TAPS = 6;
-const aeroPow = taps => [0, 0.3, 0.5, 0.66, 0.8, 0.91, 1][clamp(taps | 0, 0, AERO_TAPS)];
-const AERO_BTN = { header: 'bHead', volley: 'bVolley', bike: 'bBike' };
-function aeroGauge(type, taps) {
-  for (const k in AERO_BTN) {
-    const b = $(AERO_BTN[k]); if (!b) continue;
-    let g = b.querySelector('.apw'); if (!g) { g = document.createElement('i'); g.className = 'apw'; b.appendChild(g); }
-    g.style.setProperty('--w', k === type && taps ? Math.round(aeroPow(taps) * 100) + '%' : '0%');
-  }
-}
 function aeroUpdate(dt) {
   const p = ctrl;
-  if (!p || !p.aero) { if (!rin && aeroGauge.on) { aeroGauge.on = false; aeroGauge(null, 0); } return; }
-  if (!rin) aeroGauge.on = true;
+  if (!p || !p.aero) return;
   const a = p.aero, A = AERO[a.type];
   a.t -= dt;
   if (ball.owner && ball.owner !== p) { p.aero = null; return; }
   // Lean into the flight path of the ball
   const tx = ball.x + ball.vx * 0.15, ty = ball.y + ball.vy * 0.15, dx = tx - p.x, dy = ty - p.y, dd = Math.hypot(dx, dy);
   if (dd > 0.3 && dd < 5) { const k = Math.min(1, dt * 6); p.vx += (dx / dd * 6.5 - p.vx) * k; p.vy += (dy / dd * 6.5 - p.vy) * k; }
-  const zMax = a.type === 'header' ? 2.5 + subv(p, 'det') * 0.55 + ((p.cm || 180) - 180) / 100 : A.zMax;
-  if (!ball.owner && dist(p, ball) < A.reach && ball.z >= A.zMin && ball.z <= zMax) { p.aero = null; aerialStrike(p, a.type, aeroPow(a.taps)); return; }
+  const zMax = a.type === 'header' ? 2.5 + subv(p, 'det') * 0.55 : A.zMax;
+  if (!ball.owner && dist(p, ball) < A.reach && ball.z >= A.zMin && ball.z <= zMax) { p.aero = null; aerialStrike(p, a.type); return; }
   if (a.t <= 0) {
     p.aero = null;
     fxLabel(p, `${A.lab} dans le vide`, '#c9d1c9', 1);
     if (a.type === 'bike') p.stun = 0.7; else if (a.type === 'header') p.stun = 0.25;
   }
 }
-function aerialStrike(p, type, pow = 0.5) {
+function aerialStrike(p, type) {
   const A = AERO[type], gx = oppGoalX(p.t), d = TEAMS[p.t].dir, dG = Math.hypot(gx - ball.x, 34 - ball.y);
   const bsp = Math.hypot(ball.vx, ball.vy, ball.vz);
-  // Contact height: every action has a sweet spot (forehead, knee to hip, above the head for the overhead kick)
-  const hgt = (p.cm || 180) / 100, ideal = type === 'header' ? hgt + 0.05 : type === 'volley' ? 0.7 : 1.5;
-  const off = Math.abs(ball.z - ideal);
   // Chance of a clean contact, from the matching attributes and playstyles
   let c = type === 'header' ? 0.64 + (subv(p, 'ptete') - 0.7) * 0.9 + (subv(p, 'det') - 0.7) * 0.3 + tv(p, 'tete') * 0.08
     : type === 'volley' ? 0.56 + (subv(p, 'vol') - 0.7) * 0.9 + tv(p, 'acrobate') * 0.08
     : 0.34 + (subv(p, 'vol') - 0.7) * 0.7 + (subv(p, 'agi') - 0.7) * 0.4 + tv(p, 'acrobate') * 0.12;
   c -= pressureOn(p) * 0.2 + Math.max(0, bsp - 18) * 0.01 + Math.max(0, dG - 14) * 0.012 + (wx === 'pluie' ? 0.03 : 0);
-  // Off the sweet spot, a fast incoming ball and full power all make a clean contact harder
-  c -= off * 0.22 + Math.max(0, bsp - 15) * 0.012 + pow * pow * 0.12;
   c = clamp(c + teamAdj(p), 0.03, 0.97);
   const q = rollTier(c);
   if (ball.offside) { if (ball.offside === p) { callOffside(p); return; } ball.offside = null; }
-  if (type === 'header') sfxHead(); else sfxKick((type === 'bike' ? 9 : 7) + pow * 6);
+  if (type === 'header') sfxHead(); else sfxKick(type === 'bike' ? 12 : 10);
   if (dG < 30 && (gx - p.x) * d > 0) {
-    const zn = shotZone; if (rin) shotZone = null; else setZone(null);
+    const zn = shotZone; setZone(null);
     const inp = getInput();
     let ty = zn ? 34 + zn.x * d * (GH - 0.55) : inp.m > 0.3 ? 34 + clamp(inp.y * 1.15, -1, 1) * 3.1 : 34 + (Math.random() < 0.5 ? -1 : 1) * rnd(1.2, 3);
     // Headers are aimed down at the grass, volleys and overhead kicks anywhere in the frame
     let tz = zn ? (zn.y > 0 ? 1.9 : 0.3) : type === 'header' ? 0.45 : rnd(0.5, 1.9);
-    const err = [3.2, 1.3, 0.5, 0.15][q] * (0.75 + 0.55 * pow * pow);   // power costs accuracy
-    ty += gauss() * err; tz = tz + gauss() * err * 0.6 + (q === 0 ? rnd(0.5, 2) : 0);
-    // A volley struck above the hip, or a header met below the forehead, tends to rise
-    if (type === 'volley' && ball.z > 1.0) tz += (ball.z - 1.0) * (1.6 - q * 0.35);
-    if (type === 'header' && ball.z < hgt - 0.25) tz += (hgt - 0.25 - ball.z) * 1.2;
-    tz = Math.max(0.12, tz);
-    // Energy: the body's own power plus part of the incoming ball's speed. The more the ball is redirected,
-    // the more of its speed is lost (head ≈ 0.55 restitution, foot ≈ 0.25, overhead kick ≈ 0.2)
-    const tdx = gx + d * 0.5 - ball.x, tdy = ty - ball.y, tl = Math.hypot(tdx, tdy) || 1;
-    const inCos = bsp > 0.5 ? clamp(-(ball.vx * tdx + ball.vy * tdy) / (bsp * tl), -1, 1) : 0;   // 1 = ball sent straight back
-    const redirect = 0.35 + 0.65 * (inCos + 1) / 2;
-    const body = type === 'header' ? 4 + 13 * pow * (0.55 + 0.45 * subv(p, 'ptete')) + Math.max(0, hgt - 1.8) * 4
-      : type === 'volley' ? 9 + 22 * pow * (0.55 + 0.45 * subv(p, 'pui'))
-      : 8 + 17 * pow * (0.55 + 0.45 * subv(p, 'pui'));
-    const rest = type === 'header' ? 0.55 : type === 'volley' ? 0.25 : 0.2;
-    const v = clamp((body + bsp * rest * redirect) * [0.8, 0.93, 1, 1.03][q], 6, type === 'header' ? 27 : type === 'volley' ? 35 : 31);
-    // Spin: a clean volley gets topspin and dips, a full-power instep volley can knuckle, headers barely spin
-    let tspin = 0, knuck = 0, spin = 0;
-    if (type === 'volley') { if (q >= 2 && ball.z < 1.0) tspin = 0.35 + pow * 0.4; if (pow > 0.85 && q >= 2 && Math.random() < 0.35) { knuck = 0.6; tspin = 0; } spin = gauss() * 0.15; }
-    else if (type === 'bike') { tspin = q >= 2 ? 0.3 : -0.2; spin = gauss() * 0.2; }
-    else spin = gauss() * 0.05;
-    const sol = solveShot(ball.x, ball.y, Math.max(0.11, ball.z), v, spin, tspin, gx + d * 0.5, ty, tz);
-    kick(p, sol.vx, sol.vy, sol.vz, { shot: { t: p.t, beaten: null, pen: false, counted: false, q, aero: type }, spin, tspin, knuck });
+    const err = [3.2, 1.3, 0.5, 0.15][q];
+    ty += gauss() * err; tz = Math.max(0.12, tz + gauss() * err * 0.6 + (q === 0 ? rnd(0.5, 2) : 0));
+    const v = type === 'header' ? 10 + subv(p, 'ptete') * 6 + bsp * 0.3 : type === 'volley' ? 19 + subv(p, 'pui') * 10 + bsp * 0.15 : 16 + subv(p, 'pui') * 8 + bsp * 0.1;
+    const sol = solveShot(ball.x, ball.y, Math.max(0.11, ball.z), v, 0, 0, gx + d * 0.5, ty, tz);
+    kick(p, sol.vx, sol.vy, sol.vz, { shot: { t: p.t, beaten: null, pen: false, counted: false, q, aero: type } });
     stats.shots[p.t]++; crowdSwell(type === 'bike' ? 0.6 : 0.3, 1.3);
     actLabel(p, `${A.lab} ${Math.round(v * 3.6)} km/h`, c, q, SHOT_RES, true);
     if (type === 'bike') { slowMo(0.9, 0.3, p); comment(q >= 2 ? `Une retournée de ${p.name} ! Incroyable !` : `${p.name} tente la retournée !`, true, q >= 2); }
@@ -1957,7 +1915,7 @@ function aerialStrike(p, type, pow = 0.5) {
     if (bp && dist(p, bp.p) < 22 && q >= 1) {
       const m = bp.p, dx = m.x - ball.x, dy = m.y - ball.y, dd = Math.hypot(dx, dy) || 1, v = clamp(dd * 0.75 + 5, 7, 17);
       kick(p, dx / dd * v, dy / dd * v, type === 'header' ? 1.5 : 3, { target: m }); if (humanTeam(m.t)) setCtrl(m);
-    } else { const k = 0.6 + pow * 0.7; kick(p, d * (12 + q * 3) * k, gauss() * 4, (type === 'header' ? 3 : 5) * (0.7 + pow * 0.5)); }
+    } else kick(p, d * (12 + q * 3), gauss() * 4, type === 'header' ? 3 : 5);
     actLabel(p, `${A.lab}`, c, q, PASS_RES, true);
   }
   if (type === 'bike') p.stun = 0.8;
@@ -2037,7 +1995,7 @@ function tryControl() {
     for (const p of players) {
       if ((p.role === 'GK' && inOwnBox(p)) || p.cool > 0 || p.stun > 0 || p.wall || p.aero) continue;
       if (shootout && shootout.kicked) continue;
-      const d = dist(p, ball) * (1.15 - 0.3 * sk(p, 'phy')) * (1 - tv(p, 'tete') * 0.12) * (1.1 - subv(p, 'ptete') * 0.13) * (1 - ((p.cm || 180) - 180) / 220); if (d < hd) { hd = d; hp = p; }
+      const d = dist(p, ball) * (1.15 - 0.3 * sk(p, 'phy')) * (1 - tv(p, 'tete') * 0.12) * (1.1 - subv(p, 'ptete') * 0.13); if (d < hd) { hd = d; hp = p; }
     }
     if (hp) { header(hp); return; }
   }
@@ -2863,7 +2821,7 @@ function humanShoot(p, power) {
   if (sprinting() && !p.mustPass) { chipShot(p, power, zn ? zAim : inp.m > 0.3 ? clamp(inp.y * 1.15, -1, 1) : 0, sp); return; }
   const aim = zn ? zAim : inp.m > 0.3 ? clamp(inp.y * 1.15, -1, 1) : sp && sp.side ? sp.side * TEAMS[p.t].dir * 0.75 + gauss() * 0.1 : gauss() * 0.25;
   if (sp && !sp.side && sp.top > 0) { chipShot(p, power, aim, sp); return; }
-  if (sp) shoot(p, power, aim, sp.side ? 8.8 * (1.1 - power * 0.4) : 0, sp, sp.top < 0 ? undefined : zh);
+  if (sp) shoot(p, power, aim, sp.side ? 6.5 * (1.1 - power * 0.4) : 0, sp, sp.top < 0 ? undefined : zh);
   else shoot(p, power, aim, Math.abs(aim) > 0.45 && gd < 32 ? 5 * (1.1 - power * 0.5) : 0, null, zh);
 }
 function canKick() { return ctrl && ball.owner === ctrl && !ball.held && (state === 'play' || state === 'set'); }
@@ -3000,15 +2958,6 @@ function ballPhysics(dt) {
   if (ball.z === 0 && sp < 0.3) { ball.vx = ball.vy = 0; }
   ball.x += ball.vx * dt; ball.y += ball.vy * dt; ball.rot += sp * dt * 2.2;
 }
-let lineWatch = 0;
-function goalLineCheck() {
-  const onLine = Math.abs(ball.y - 34) < GH && ball.z < BAR && ((ball.x < 0.06 + BR && ball.x > -0.06 - BR && ball.x < 0.2) || (ball.x > L - 0.06 - BR && ball.x < L + 0.06 + BR && ball.x > L - 0.2));
-  const over = ball.x < 0 || ball.x > L;
-  if (onLine && over) lineWatch = time;
-  else if (lineWatch && !over && time - lineWatch < 0.6 && (state === 'play')) {
-    lineWatch = 0; showMsg('Pas but !', 1.2, true, 'Le ballon n’a pas entièrement franchi la ligne'); comment('Pas but ! Le ballon n’a pas franchi entièrement la ligne, la technologie l’a confirmé.', true, true); sfxOoh();
-  } else if (time - lineWatch > 1) lineWatch = 0;
-}
 function checkBounds(prevX) {
   for (const gx of [0, L]) for (const py of [34 - GH, 34 + GH]) {
     const dx = ball.x - gx, dy = ball.y - py, d = Math.hypot(dx, dy);
@@ -3022,9 +2971,7 @@ function checkBounds(prevX) {
     ball.vx *= -0.5; ball.vz = Math.abs(ball.vz) * 0.3; ball.x = ball.x < 0 ? 0.05 : L - 0.05;
     ball.shot = null; ball.spin = ball.tspin = ball.knuck = 0; sfxPost(); sfxOoh(); crowdSwell(0.45, 1.3); showMsg('Transversale !', 1, true); comment('La transversale tremble encore !', true, true); shakeT = 0.25; markHighlight('Transversale'); return;
   }
-  // Whole ball over the whole line: centre beyond the line's outer edge (6 cm) by more than the radius
-  const OUT = 0.06 + BR;
-  if (ball.x < -OUT || ball.x > L + OUT) {
+  if (ball.x < 0 || ball.x > L) {
     const gx = ball.x < 0 ? 0 : L;
     const defT = ownGoalX(0) === gx ? 0 : 1;
     if (Math.abs(ball.y - 34) < GH && ball.z < BAR) { countOnTarget(); goal(1 - defT); return; }
@@ -3033,8 +2980,8 @@ function checkBounds(prevX) {
     if (ball.shot && Math.abs(ball.y - 34) < GH + 4) { crowdSwell(0.35, 1.2); sfxOoh(); comment(pickOf(['Juste à côté !', 'Ça passe tout près du poteau !', 'Le public y a cru !'])); }
     if (ball.last === defT) { stats.corners[1 - defT]++; setPiece('corner', 1 - defT, gx === L ? L - 0.4 : 0.4, ball.y < 34 ? 0.4 : W - 0.4); }
     else setPiece('goalkick', defT, 0, 0);
-  } else if ((ball.y < -OUT || ball.y > W + OUT) && drill) { drillResult(false, 'Raté !');
-  } else if (ball.y < -OUT || ball.y > W + OUT) {
+  } else if ((ball.y < 0 || ball.y > W) && drill) { drillResult(false, 'Raté !');
+  } else if (ball.y < 0 || ball.y > W) {
     setPiece('throw', 1 - ball.last, clamp(ball.x, 1, L - 1), ball.y < 0 ? 0.2 : W - 0.2);
   }
 }
@@ -3166,17 +3113,6 @@ function tvWipe() {
 }
 function rpSpeed() { return rp && rp.shots[rp.si] ? rp.shots[rp.si].speed : 0.5; }
 function updateReplayChip() { if (rp) replayChip.textContent = `${rp.title} · ${RP_CAM_LAB[rp.shots[rp.si].cam]} ⏭`; }
-// Training / arena replay: from just before the last strike to the end of the action, then the next attempt
-function startDrillReplay() {
-  const d = drill, end = d.replay.end; d.replay = null;
-  const from = Math.max(end - 4.5, (lastShotT > end - 6 ? lastShotT : end - 3) - 1.3);
-  const fr = frames.filter(f => f.t >= from && f.t <= end), n = fr.length;
-  const shots = [{ from: 0, to: Math.max(0, n - 1), speed: 0.6, cam: 'tv' }];
-  if (startReplayShots(fr, shots, () => { if (drill) drillAdvance(); }, 'Ralenti')) {
-    if (lastShot && lastShotT >= from) { showShotInfo(lastShot, 'Ralenti'); clearTimeout(shotInfo._t); }
-    ball.owner = null;
-  }
-}
 function startReplay() {
   const fr = frames.filter(f => f.t >= goalTime - 3.8 && f.t <= goalTime + 0.6), n = fr.length;
   // 1) the whole move from the broadcast camera, 2) the finish again, slower, from behind the goal
@@ -3423,7 +3359,7 @@ function drillResult(scored, why) {
   if (scored === null) { state = 'drillwait'; d.wait = 1.3; d.kicked = 0; d.armed = false; ball.shot = null; ball.target = null; showMsg(why || 'On recommence', 1.2, true); return; }
   d.tries++; if (d.by[d.cur]) d.by[d.cur][1]++;
   if (scored) { d.goals++; d.streak++; d.best = Math.max(d.best, d.streak); if (d.by[d.cur]) d.by[d.cur][0]++; } else d.streak = 0;
-  state = 'drillwait'; d.wait = scored ? 1.4 : 1.1; d.kicked = 0; d.armed = false; d.replay = { end: time + 0.5 };
+  state = 'drillwait'; d.wait = scored ? 2.4 : 1.9; d.kicked = 0; d.armed = false;
   ball.shot = null; ball.target = null;
   const info = `${d.goals} / ${d.tries}${d.kmh ? ` · frappe à ${Math.round(d.kmh)} km/h` : ''}`;
   if (scored) {
@@ -3569,7 +3505,7 @@ function step(dt) {
   }
   if (state === 'play' && half === 2 && !shootout && clock >= 90 + added[1]) { endMatch(); return; }
   if (state === 'sowait' && shootout) { shootout.wait -= dt; if (shootout.wait <= 0) { shootoutAdvance(); return; } }
-  if (state === 'drillwait' && drill) { drill.wait -= dt; if (drill.wait <= 0) { if (drill.replay) startDrillReplay(); else drillAdvance(); return; } }
+  if (state === 'drillwait' && drill) { drill.wait -= dt; if (drill.wait <= 0) { drillAdvance(); return; } }
 
   for (const ht of humanTeams()) withCtx(ht, () => {
     if (act.passDown) act.passT += dt;
@@ -3640,10 +3576,10 @@ function step(dt) {
   }
   if (ball.owner) attach(dt);
   else {
-    const px = ball.x; ballPhysics(dt); shotSlowMo(); goalLineCheck();
+    const px = ball.x; ballPhysics(dt); shotSlowMo();
     if (state === 'play') checkBounds(px); else netContain();
   }
-  if (state === 'play') { for (const ht of humanTeams()) withCtx(ht, () => aeroUpdate(dt)); tryControl(); resolveSmother(); aiTackles(dt); }
+  if (state === 'play') { aeroUpdate(dt); tryControl(); resolveSmother(); aiTackles(dt); }
   if (shootout && shootout.kicked && state === 'play') {
     if (ball.owner && ball.owner.role === 'GK') shootoutResult(false);
     else if (time - shootout.kicked > 2.6) shootoutResult(false);
@@ -3880,8 +3816,7 @@ function makeModel(p) {
     o.material = !kit ? mat : kit[o.name] || (/Hair|Eyelash/.test(o.name) ? look.hair : look.skin);
     if (kit && /Hair/.test(o.name) && ko.hs === 4) o.visible = false;   // shaved head
   });
-  const sc = (p.cm || 180 * (p.ht || 1)) / 100 / mdl.H,   // real height in metres
-    bk = kit ? clamp(ko.bulk || 1, 0.92, 1.1) : 1;
+  const sc = 1.8 * (p.ht || 1) / mdl.H, bk = kit ? clamp(ko.bulk || 1, 0.92, 1.1) : 1;
   root.scale.set(sc * bk, sc, sc * bk);
   scene.add(root);
   const bones = {};
@@ -3950,16 +3885,7 @@ function modelMove(p, m, celebrate) {
 }
 // What the body does this frame: a timed move (dive, slide, header...) or a blend of idle / jog / run / backwards / sideways
 function updateModel(p, m, x, y, dt, celebrate) {
-  m.root.position.set(x - L2, 0, y - W2);
-  // Bodies cannot spin on the spot: the faster the run, the wider the turn
-  const tgA = Math.atan2(p.fx, p.fy), spd0 = Math.hypot(p.vx || 0, p.vy || 0);
-  if (m.ry == null || p.dive > 0 || p.aero || p.slide > 0 || p.skillT > 0 || celebrate || state === 'replay' || state === 'intro' || p.siuuT != null) m.ry = tgA;
-  else {
-    let dA = tgA - m.ry; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
-    const rate = spd0 > 6.5 ? 4.2 : spd0 > 3.5 ? 6.5 : 11;
-    m.ry += clamp(dA, -rate * dt, rate * dt);
-  }
-  m.root.rotation.y = m.ry;
+  m.root.position.set(x - L2, 0, y - W2); m.root.rotation.y = Math.atan2(p.fx, p.fy);
   const W = [], ov = modelMove(p, m, celebrate);
   p.ovRec = ov;
   const kf = Math.min(1, dt * 12);
@@ -3990,22 +3916,8 @@ function updateModel(p, m, x, y, dt, celebrate) {
   }
   for (const key of [...m.on]) if (!used.has(key)) { m.acts[key].stop(); m.on.delete(key); }
   m.mixer.update(dt);
-  headLook(p, m, dt, celebrate);
   const dm = state === 'replay' ? p.dmRep : (p.dmove && p.skillT > 0 ? [p.dmove, 1 - p.skillT / p.dmove.dur, p.dribSide || 1] : null);
   if (dm && !(dm[0].key === 'roulette' && mdl.clips.spin)) applyDribbleBones(m, dm[0], dm[1], dm[2]);
-}
-// Players keep their eyes on the ball: neck and head turn towards it (up to ~65°), smoothly
-function headLook(p, m, dt, celebrate) {
-  if (!m.head) { m.head = m.root.getObjectByName('mixamorigHead') || 0; m.neck = m.root.getObjectByName('mixamorigNeck') || 0; }
-  if (!m.head) return;
-  let want = 0;
-  if (!celebrate && !(p.dive > 0) && !(p.stun > 0)) {
-    let a = Math.atan2(ball.x - p.x, ball.y - p.y) - m.ry; a = Math.atan2(Math.sin(a), Math.cos(a));
-    want = Math.abs(a) < 2.4 ? clamp(a, -1.15, 1.15) : 0;   // ball behind: turn the whole body instead
-  }
-  m.hy = (m.hy || 0) + (want - (m.hy || 0)) * Math.min(1, dt * 7);
-  if (m.neck) m.neck.rotateY(m.hy * 0.4);
-  m.head.rotateY(m.hy * 0.6);
 }
 // ---- Skill moves on the rigged body: the move's own animation (the same one that drives the classic figure) is layered
 // on top of the locomotion clips by rotating the bones in world space, around the player's forward and sideways axes ----
@@ -4171,52 +4083,7 @@ function buildPitch() {
   g.setLineDash([0.4, 0.3]);
   for (const bx of [L / 2 - 16, L / 2 + 6]) g.strokeRect(bx, W + 1, 10, 3);
   g.setLineDash([]);
-  turfPass(g, PPM, snow, train);
   if (pitchTex) pitchTex.needsUpdate = true;
-}
-function noiseGrid(cell) {
-  const nx = Math.ceil(PW / cell) + 2, ny = Math.ceil(PH / cell) + 2, a = new Float32Array(nx * ny);
-  for (let i = 0; i < a.length; i++) a[i] = Math.random() * 2 - 1;
-  return (x, y) => {
-    const fx = (x - PX0) / cell, fy = (y - PY0) / cell, ix = fx | 0, iy = fy | 0;
-    let tx = fx - ix, ty = fy - iy; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
-    const i0 = iy * nx + ix, a0 = a[i0] + (a[i0 + 1] - a[i0]) * tx, a1 = a[i0 + nx] + (a[i0 + nx + 1] - a[i0 + nx]) * tx;
-    return a0 + (a1 - a0) * ty;
-  };
-}
-// Natural turf: big and small patches, a slight hue drift, floodlight pools at night, cloud shade by day.
-// Worked out on a small canvas (one value per 4 px) and blended over the pitch with soft light, so the pitch
-// itself is never read back: 0.5 leaves a colour as it is, above lightens, below darkens.
-let turfCanvas = null;
-function turfPass(g, PPM, snow, train) {
-  const night = timePick === 'nuit' || matchMode === 'etoiles', cloudy = !night && wx !== 'clair';
-  const nBig = noiseGrid(14), nMid = noiseGrid(3.5), nFine = noiseGrid(0.7), nHue = noiseGrid(6), nCloud = noiseGrid(30);
-  // Floodlight towers just outside the corners and halfway along the touchlines
-  const towers = [[-12, -12], [L + 12, -12], [-12, W + 12], [L + 12, W + 12], [L / 2, -16], [L / 2, W + 16]];
-  const S = 4 / PPM, gw = Math.ceil(PW / S), gh = Math.ceil(PH / S);
-  if (!turfCanvas || turfCanvas.width !== gw || turfCanvas.height !== gh) turfCanvas = makeCanvas(gw, gh);
-  const tg = turfCanvas.getContext('2d'), img = tg.createImageData(gw, gh), D = img.data;
-  const turf = !snow, k = 0.83;   // turns a relative change on the turf (about 40 % grey) into a soft-light level
-  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
-    const x = PX0 + (i + 0.5) * S, y = PY0 + (j + 0.5) * S, o = (j * gw + i) * 4;
-    let lm = 1;
-    if (night) {
-      let pool = 0;
-      for (let t = 0; t < 6; t++) { const dx = x - towers[t][0], dy = y - towers[t][1]; pool += Math.exp(-(dx * dx + dy * dy) / (t < 4 ? 2600 : 1500)); }
-      lm = 0.8 + Math.min(0.42, pool * 0.3);
-    } else if (cloudy) lm = 1 + nCloud(x, y) * 0.07;
-    let fr = lm, fg = lm, fb = lm;
-    if (turf) {
-      const m = nMid(x, y), hue = nHue(x, y) * 0.65 + m * 0.35;              // + yellow-green / - blue-green
-      const br = 1 + nBig(x, y) * 0.06 + m * 0.05 + nFine(x, y) * 0.06 + (Math.random() - 0.5) * 0.05;
-      fr *= br * (1 + hue * 0.2); fg *= br * (1 + hue * 0.04); fb *= br * (1 - hue * 0.25);
-    }
-    D[o] = clamp(128 + (fr - 1) * k * 255, 0, 255); D[o + 1] = clamp(128 + (fg - 1) * k * 255, 0, 255); D[o + 2] = clamp(128 + (fb - 1) * k * 255, 0, 255); D[o + 3] = 255;
-  }
-  tg.putImageData(img, 0, 0);
-  g.save(); g.globalCompositeOperation = 'soft-light'; g.imageSmoothingEnabled = true;
-  g.drawImage(turfCanvas, PX0, PY0, gw * S, gh * S);
-  g.restore();
 }
 function drawCrowd() {
   if (!crowdCanvas) crowdCanvas = makeCanvas(1024, 512);
@@ -4442,13 +4309,12 @@ function buildGrass() {
   geo.setAttribute('aRnd', new THREE.BufferAttribute(rd, 3));
   grassU = {
     uMap: { value: pitchTex }, uC: { value: new THREE.Vector2() }, uS: { value: GRASS_S }, uT: { value: 0 },
-    uW: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uSnow: { value: 0 },
-    uSh: { value: new THREE.Vector4(0, SH_A, SH_B, 0.5) }
+    uW: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: new THREE.Color(1, 1, 1) }, uSnow: { value: 0 }
   };
   const f = v => v.toFixed(3);
   const vs = `attribute vec3 aRnd;
-uniform vec2 uC; uniform float uS; uniform float uT; uniform vec3 uW; uniform vec4 uSh;
-varying vec2 vUv; varying float vTip; varying float vMow; varying float vShade;
+uniform vec2 uC; uniform float uS; uniform float uT; uniform vec3 uW;
+varying vec2 vUv; varying float vTip; varying float vMow;
 void main() {
   vec2 r = position.xz;
   vec2 p = r + floor((uC - r) / uS + 0.5) * uS;
@@ -4476,20 +4342,18 @@ void main() {
     pos.y = h * sqrt(1.0 - bend * bend * 0.8);
   }
   vTip = step(1.5, k);
-  // Inside the main stand's shadow only the sky and fill light remain
-  vShade = mix(1.0, uSh.w, uSh.x * smoothstep(-0.6, 0.6, p.y - (uSh.y + uSh.z * p.x)));
   vUv = vec2((g.x - (${f(PX0)})) / ${f(PW)}, 1.0 - (g.y - (${f(PY0)})) / ${f(PH)});
   gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
 }`;
   const fs = `uniform sampler2D uMap; uniform vec3 uLight; uniform float uSnow;
-varying vec2 vUv; varying float vTip; varying float vMow; varying float vShade;
+varying vec2 vUv; varying float vTip; varying float vMow;
 void main() {
   float j = fract(sin(dot(floor(vUv * 4096.0), vec2(12.9898, 78.233))) * 43758.5453);
-  vec3 c = texture2D(uMap, vUv).rgb * mix(0.74, 1.16, vTip) * (0.9 + 0.2 * j);
+  vec3 c = texture2D(uMap, vUv).rgb * mix(0.62, 1.2, vTip) * (0.9 + 0.2 * j);
   c.r *= 0.94 + 0.12 * j;
   c *= mix(1.0, vMow, 0.3 + 0.7 * vTip);
   c = mix(c, vec3(0.93, 0.96, 1.0), uSnow * vTip * 0.35);
-  gl_FragColor = vec4(c * uLight * vShade, 1.0);
+  gl_FragColor = vec4(c * uLight, 1.0);
 }`;
   grassMesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: grassU, vertexShader: vs, fragmentShader: fs, side: THREE.DoubleSide }));
   grassMesh.frustumCulled = false; grassMesh.renderOrder = -1;
@@ -4500,8 +4364,7 @@ function grassLight() {
   if (!grassU) return;
   const c = new THREE.Color(0, 0, 0), t = new THREE.Color();
   c.add(t.copy(hemiL.color).multiplyScalar(hemiL.intensity));
-  const ny = sunL.position.y / sunL.position.length();   // blades get the same sun angle as the ground
-  c.add(t.copy(sunL.color).multiplyScalar(sunL.intensity * ny));
+  c.add(t.copy(sunL.color).multiplyScalar(sunL.intensity * 0.88));
   c.add(t.copy(fillL.color).multiplyScalar(fillL.intensity * 0.66));
   grassU.uLight.value.copy(c.multiplyScalar(0.93));
   grassU.uSnow.value = wx === 'neige' ? 1 : 0;
@@ -5302,50 +5165,10 @@ function init3D() {
   scene.add(sunL.target); sunL.matrixAutoUpdate = true; sunL.target.matrixAutoUpdate = true;
   Object.assign(sunL.shadow.camera, { left: -36, right: 36, top: 30, bottom: -30 }); sunL.shadow.camera.updateProjectionMatrix();
 }
-// While the shoot button is held with a side arrow, a curved line on the grass shows how the ball will bend
-let curlLine = null;
-function updateCurlPreview() {
-  if (!renderer) return;
-  const sp = act.shootDown && canKick() && state !== 'replay' ? getSpin('shoot') : null;
-  if (!sp || !sp.side) { if (curlLine) curlLine.visible = false; return; }
-  if (!curlLine) {
-    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(33 * 3), 3));
-    curlLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: '#ffd23f', transparent: true, opacity: 0.85, depthTest: false }));
-    curlLine.renderOrder = 5; curlLine.frustumCulled = false; scene.add(curlLine);
-  }
-  const d = TEAMS[HT].dir, gx = oppGoalX(HT), ty = 34 + sp.side * d * 0.75 * 3.1;
-  const dx = gx - ball.x, dy = ty - ball.y, dd = Math.hypot(dx, dy) || 1, nx = -dy / dd, ny = dx / dd;
-  // The ball bends towards the spin side, so it leaves the foot on the opposite side of the straight line
-  const sg = sp.side, power = Math.min(1, act.shootT / 0.85), bow = -sg * dd * (0.16 - power * 0.05);
-  const cx = ball.x + dx / 2 + nx * bow, cy = ball.y + dy / 2 + ny * bow, arr = curlLine.geometry.attributes.position.array;
-  for (let i = 0; i <= 32; i++) {
-    const t = i / 32, u = 1 - t, x = u * u * ball.x + 2 * u * t * cx + t * t * gx, y = u * u * ball.y + 2 * u * t * cy + t * t * ty;
-    arr[i * 3] = x - L2; arr[i * 3 + 1] = 0.06; arr[i * 3 + 2] = y - W2;
-  }
-  curlLine.geometry.attributes.position.needsUpdate = true; curlLine.visible = true;
-}
-// Invisible caster high up along the sun ray: it throws the main stand's shadow (diagonal edge) on the near
-// part of the pitch, so players walking into it really go dark. Edge in world coords: z = SH_A + SH_B * x
-const SH_A = 6, SH_B = -0.09, SUN_DAY = { x: -40, y: 60, z: 50 }, SUN_NIGHT = { x: -25, y: 80, z: 35 };
-let standCaster = null;
-function setStandShadow(on) {
-  if (!standCaster) {
-    const sp = SUN_DAY, k = 18 / sp.y, ox = sp.x * k, oz = sp.z * k;
-    const pts = [[-95, SH_A + SH_B * -95], [95, SH_A + SH_B * 95], [95, 80], [-95, 80]].map(([x, z]) => [x + ox, 18, z + oz]);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([...pts[0], ...pts[1], ...pts[2], ...pts[0], ...pts[2], ...pts[3]]), 3));
-    geo.computeVertexNormals();
-    standCaster = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
-    standCaster.castShadow = true; standCaster.frustumCulled = false; scene.add(standCaster);
-  }
-  standCaster.visible = on;
-  if (grassU) grassU.uSh.value.x = on ? 1 : 0;
-}
 function updateSun() {
   if (!sunL) return;
   const cx = (state === 'menu' ? L2 : camX) - L2, cz = (state === 'menu' ? W2 : camY) - W2;
-  const sd = standCaster && standCaster.visible ? SUN_DAY : SUN_NIGHT;
-  sunL.target.position.set(cx, 0, cz); sunL.position.set(cx + sd.x, sd.y, cz + sd.z);
+  sunL.target.position.set(cx, 0, cz); sunL.position.set(cx - 25, 80, cz + 35);
   const ext = state === 'menu' ? 68 : 26 + 14 * ZOOMS[zoomIdx];
   if (sunL.shadow.camera.right !== ext) { Object.assign(sunL.shadow.camera, { left: -ext, right: ext, top: ext * 0.8, bottom: -ext * 0.8 }); sunL.shadow.camera.updateProjectionMatrix(); }
 }
@@ -5369,10 +5192,8 @@ function applyAtmosphere() {
     : (wx === 'clair' ? '#8fbfe8' : wx === 'pluie' ? '#6c7884' : '#b7c2cd');
   scene.background.set(sky); scene.fog.color.set(sky);
   scene.fog.near = wx === 'clair' ? 150 : 70; scene.fog.far = wx === 'clair' ? 330 : 220;
-  hemiL.intensity = (night ? 0.62 : wx === 'clair' ? 0.75 : 0.62) * (wx === 'pluie' ? 0.82 : wx === 'neige' ? 0.92 : 1);
-  sunL.intensity = night ? 0.85 : wx === 'clair' ? 0.95 : 0.55;
-  // Afternoon sun lower in the sky behind the main stand: long player shadows and the stand's shadow on the near side
-  setStandShadow(!night && venueNow() !== 'entrainement');
+  hemiL.intensity = (night ? 0.62 : 0.6) * (wx === 'pluie' ? 0.82 : wx === 'neige' ? 0.92 : 1);
+  sunL.intensity = night ? 0.85 : wx === 'clair' ? 0.88 : 0.5;
   sunL.color.set(night ? '#fff4e0' : '#fff9ee');
   fillL.intensity = night ? 0.32 : 0.2;
   glowSprites.forEach(s => { s.visible = night || wx !== 'clair'; });
@@ -5919,7 +5740,7 @@ function syncScene(dt) {
   stands.forEach(st => { st.userData.seat.position.y = 1.2 + 34 * Math.sin(0.6) / 2 + (excited ? Math.abs(Math.sin(now * 0.012 + st.userData.ph)) * 0.35 : 0); });
   boardTexs.forEach(t => { t.offset.x = (now * 0.00003) % 1; });
   updateWeather(dt); updateConfetti(dt); updateTrail(dt); updateAir(dt);
-  updateFans(dt, now); updateBench(dt || 0); updateGrass(); updateCurlPreview(); updateWindChip(); updateNets(dt); updateSky(now);
+  updateFans(dt, now); updateBench(dt || 0); updateGrass(); updateWindChip(); updateNets(dt); updateSky(now);
   updateGoalFx(dt); updateSys(fxDirt, dt); updateSys(fxFire, dt);
 }
 let windChipT = 0;
@@ -7107,7 +6928,7 @@ function netIncoming(n, conn) {
   n.conn = conn;
   const to = setTimeout(() => { if (net === n && !n.live && n.conn === conn) { n.conn = null; conn.close(); } }, 8000);
   conn.on('data', d => { if (net === n && n.conn === conn) netRecvHost(n, d, to); });
-  conn.on('close', () => { if (net !== n || n.conn !== conn || n.over) return; if (n.live) netLost('Ton adversaire a quitté le match.'); else n.conn = null; });
+  conn.on('close', () => { if (net !== n || n.conn !== conn) return; if (n.live) netLost('Ton adversaire a quitté le match.'); else n.conn = null; });
 }
 // The guest's team as the host will play it: a name, a kit and eleven sane players
 function netOpp(m) {
@@ -7232,8 +7053,6 @@ function netGuestFrame(dt) {
   n.intro = intro;
   const ht = state === 'break';
   if (ht !== n.ht) { if (ht) halfTimePanel(); else tvStatsEl.hidden = true; n.ht = ht; }
-  const ae = ctrl && ctrl.aero, ag = ae ? ae.type + ae.taps : '';
-  if (ag !== n.ag) { n.ag = ag; aeroGauge(ae ? ae.type : null, ae ? ae.taps : 0); }
   const rpOn = state === 'replay' && !!rp;
   if (rpOn) updateReplayChip();
   if ((replayChip.style.display === 'block') !== rpOn) replayChip.style.display = rpOn ? 'block' : 'none';
