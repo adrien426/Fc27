@@ -158,6 +158,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 /* Simplified pad: through balls are a swipe on Passe, volleys and bicycle kicks come from Tir, spin arrows are PC-only */
 #bThru,#bVolley,#bBike,.sarr{display:none!important}
 #bHead{right:221px;bottom:79px;width:62px;height:62px}
+#bLob{right:221px;bottom:79px;width:62px;height:62px;background:#bfe6ff;color:#0f2a5c;font-size:17px}
 #bSprint{right:42px;bottom:184px;width:56px;height:56px;background:rgba(10,22,15,.6);color:#f4f7f0;border:2px solid rgba(255,255,255,.45);font-size:15px;transition:background .15s,box-shadow .15s}
 #bSprint.go{background:var(--gold);color:#13241a;border-color:#fff;box-shadow:0 0 0 4px rgba(242,194,48,.45),0 0 18px rgba(242,194,48,.8)}
 
@@ -349,6 +350,7 @@ select.name{width:230px;cursor:pointer}
       <button class="pbtn" id="bShoot">Tir</button>
       <button class="pbtn" id="bFoot" style="display:none">Pied D</button>
       <button class="pbtn aero" id="bHead" style="display:none">Tête</button>
+      <button class="pbtn" id="bLob" style="display:none">Lob</button>
       <button class="pbtn aero" id="bVolley" style="display:none">Volée</button>
       <button class="pbtn aero" id="bBike" style="display:none">Retour&shy;née</button>
       <button class="sarr" data-for="shoot" data-sx="0" data-sy="1" aria-label="Effet haut" style="right:57px;bottom:140px">▲</button>
@@ -1427,22 +1429,27 @@ function passTo(p, m, lofted, sp) {
   if (off) ball.offside = m;
   if (humanTeam(m.t)) setCtrl(m);
 }
-function throughPass(p, m) {
-  const d = TEAMS[p.t].dir, off = isOffside(m);
-  const tx = clamp(m.x + d * rnd(7, 11) + m.vx * 0.4, 2, L - 2);
-  const ty = clamp(m.y + (34 - m.y) * 0.15 + m.vy * 0.4, 2, W - 2);
+// lob: chipped over the defence, aimed further ahead since the receiver keeps running while it flies
+function throughPass(p, m, lob) {
+  const d = TEAMS[p.t].dir, off = isOffside(m), lead = lob ? 1.4 : 0.4;
+  const tx = clamp(m.x + d * rnd(7, 11) * (lob ? 1.15 : 1) + m.vx * lead, 2, L - 2);
+  const ty = clamp(m.y + (34 - m.y) * 0.15 + m.vy * lead, 2, W - 2);
   const dx = tx - ball.x, dy = ty - ball.y, dd = Math.hypot(dx, dy) || 1;
   const show = isHum(p);
   let v = clamp(dd * 0.78 + 5, 9, 24), err = 0.03 * errMul(p), ang = Math.atan2(dy, dx);
-  const c = throughChance(p, m, dd, tx, ty), q = rollTier(c);
+  const c = throughChance(p, m, dd, tx, ty) * (lob ? 0.95 : 1), q = rollTier(c);
   if (q === 3) err *= 0.2;
   else if (q === 2) err *= 0.6;
   else if (q === 1) { err *= 1.8; v *= rnd(0.85, 1.2); }
   else { ang += (Math.random() < 0.5 ? -1 : 1) * rnd(0.2, 0.4); v *= Math.random() < 0.5 ? 0.65 : 1.4; }
   ang += gauss() * err;
-  actLabel(p, 'Passe en profondeur', c, q, PASS_RES, show);
-  if (show && q === 3) comment(`Passe en profondeur millimétrée de ${p.name} !`);
-  kick(p, Math.cos(ang) * v, Math.sin(ang) * v, 0, { target: m });
+  actLabel(p, lob ? 'Passe lobée' : 'Passe en profondeur', c, q, PASS_RES, show);
+  if (show && q === 3) comment(lob ? `Ballon piqué parfait de ${p.name} par-dessus la défense !` : `Passe en profondeur millimétrée de ${p.name} !`);
+  if (lob) {
+    // Same flight as a lobbed pass: high enough to clear the defenders, landing just in front of the receiver
+    const vz = clamp(5 + dd * 0.17, 6, 13), vh = dd * 0.72 / (2 * vz / G) * (v / clamp(dd * 0.78 + 5, 9, 24));
+    kick(p, Math.cos(ang) * vh, Math.sin(ang) * vh, vz, { target: m });
+  } else kick(p, Math.cos(ang) * v, Math.sin(ang) * v, 0, { target: m });
   if (off) ball.offside = m;
   if (humanTeam(m.t)) setCtrl(m);
 }
@@ -2559,6 +2566,12 @@ function humanPass(p, hold) {
     kick(p, dir.x * vh, dir.y * vh, vz, o);
   } else kick(p, dir.x * 16, dir.y * 16, 0, o);
 }
+function humanThroughLob(p) {
+  const dir = inputDir(p), bt = bestThrough(p, dir) || bestThrough(p, null);
+  if (bt) { throughPass(p, bt.p, true); return; }
+  const vz = 9, vh = 26 * 0.72 / (2 * vz / G);
+  kick(p, dir.x * vh, dir.y * vh, vz);
+}
 function humanThrough(p) {
   const dir = inputDir(p);
   const bt = bestThrough(p, dir);
@@ -2849,6 +2862,11 @@ function pressThru() {
   if (state === 'replay') { endReplay(); return; }
   if (canKick() && !(ctrl.mustPass && setKind === 'penalty')) { startPlay(); humanThrough(ctrl); }
   else act.teamPress = true;
+}
+function pressLob() {
+  if (netFwd('pressLob')) return;
+  if (state === 'replay') { endReplay(); return; }
+  if (canKick() && !(ctrl.mustPass && setKind === 'penalty')) { startPlay(); humanThroughLob(ctrl); }
 }
 function releaseThru() { if (netFwd('releaseThru')) return; act.teamPress = false; }
 function pressShoot() {
@@ -3603,7 +3621,7 @@ function step(dt) {
 const L2 = L / 2, W2 = W / 2;
 const FIG = 1.0, BR = 0.14;
 // Proche, TV, Large, Réel (close broadcast framing with a narrower lens, like console football games)
-const ZOOMS = [0.72, 1, 1.4, 0.56];
+const ZOOMS = [0.72, 1, 1.4, 0.48];
 const CAM_NAMES = ['Caméra proche', 'Caméra TV', 'Caméra large', 'Caméra réelle'];
 let zoomIdx = 3; // Real camera by default
 let renderer = null, scene = null, camera = null, glError = null, tmpV = null, tmpAxis = null, upAxis = null;
@@ -6211,6 +6229,11 @@ const KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', Arr
 window.addEventListener('keydown', e => {
   if (e.target && e.target.tagName === 'INPUT') return;
   if ((state === 'intro' || state === 'break') && !e.repeat && e.code !== 'KeyP' && e.code !== 'Escape') { skipIntro(); return; }
+  // Any key skips a replay; movement and sprint keys still count so the player can run straight away
+  if (state === 'replay' && !e.repeat && e.code !== 'KeyP' && e.code !== 'Escape') {
+    endReplay();
+    if (!KEYMAP[e.code] && e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') { e.preventDefault(); return; }
+  }
   if (KEYMAP[e.code]) { keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
   if (SPINKEYS[e.code]) { keys[SPINKEYS[e.code]] = true; return; }
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') { act.sprint = true; return; }
@@ -6223,6 +6246,7 @@ window.addEventListener('keydown', e => {
   else if (/^(Digit|Numpad)[0-6]$/.test(e.code)) { const n = +e.code.slice(-1); setZone(n === 0 ? null : n - 1); }
   else if (e.code === 'KeyK') { e.preventDefault(); pressShoot(); }
   else if (e.code === 'KeyL') { e.preventDefault(); pressThru(); }
+  else if (e.code === 'KeyI') { e.preventDefault(); pressLob(); }
   else if (e.code === 'KeyE') pressAerial('header');
   else if (e.code === 'KeyR') pressAerial('volley');
   else if (e.code === 'KeyU') pressAerial('bike');
@@ -6239,7 +6263,12 @@ window.addEventListener('keyup', e => {
 });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; act.sprint = false; act.teamPress = false; });
 
-window.addEventListener('pointerdown', e => { if ((state === 'intro' || state === 'break') && !(e.target && e.target.closest && e.target.closest('#btnPause'))) skipIntro(); }, true);
+window.addEventListener('pointerdown', e => {
+  if (e.target && e.target.closest && e.target.closest('#btnPause, #overlay')) return;
+  if (state === 'intro' || state === 'break') skipIntro();
+  // A tap anywhere skips a replay, and does nothing else (no pass or shot from the same tap)
+  else if (state === 'replay') { endReplay(); e.stopPropagation(); e.preventDefault(); }
+}, true);
 const joyZone = $('joyZone'), joyBase = $('joyBase'), joyKnob = $('joyKnob');
 let joyCx = 0, joyCy = 0;
 joyZone.addEventListener('pointerdown', e => {
@@ -6364,6 +6393,7 @@ const padEnd = e => { padDrag = false; e.stopPropagation(); };
 padSq.addEventListener('pointerup', padEnd); padSq.addEventListener('pointercancel', padEnd);
 padSq.addEventListener('dblclick', () => { if (aimSP) { aimSP.cx = aimSP.cy = 0; aimSP.rot = 0; aimGuideT = 0; } });
 bindBtn('bThru', pressThru, releaseThru);
+bindBtn('bLob', pressLob, () => {});
 bindBtn('bTackle', pressTackle, () => {});
 bindBtn('bHead', () => pressAerial('header'), () => {});
 bindBtn('bVolley', () => pressAerial('volley'), () => {});
@@ -6377,6 +6407,9 @@ function updateAeroBtns() {
   const near = show && !ball.owner && ball.z > 0.25 && dist(ctrl, ball) < 9;
   const hb = $('bHead'), want = near ? '' : 'none';
   if (hb.style.display !== want) hb.style.display = want;
+  // Lob sits in the same spot: it only shows with the ball at the player's feet, the header only for a ball in the air
+  const lb = $('bLob'), wantL = show && ball.owner === ctrl && !ball.held && !(ctrl.mustPass && setKind === 'penalty') ? '' : 'none';
+  if (lb.style.display !== wantL) lb.style.display = wantL;
 }
 bindBtn('bSprint', () => { act.sprint = true; }, () => { act.sprint = false; });
 replayChip.onclick = endReplay;
@@ -6544,6 +6577,7 @@ function showOptions() {
       <b>Passe</b><span>Toucher pour une passe au sol, glisser le doigt sur le bouton pour une passe en profondeur ; sans ballon, prend le joueur le plus proche du ballon</span>
       <b>Tir</b><span>Maintenir pour charger : plus c’est long, plus c’est fort et haut ; oriente le joystick pour viser. Sur un ballon en l’air, Tir fait une volée, une retournée ou une tête</span>
       <b>Tête</b><span>Bouton jaune qui apparaît quand un ballon aérien arrive</span>
+      <b>Lob</b><span>Avec le ballon : passe en profondeur lobée par-dessus la défense</span>
       <b>Jeu assisté</b><span>Lâche le joystick : sans ballon ton joueur presse et tacle tout seul, avec le ballon il dribble, passe et tire tout seul</span>
       <b>Zone de tir</b><span>Touche une case du petit but (en haut / en bas × gauche / centre / droite) avant de tirer ; au clavier 1-3 en haut, 4-6 en bas, 0 automatique</span>
       <b>Tacle</b><span>Sa chance de réussite (0 à 100 %) s’affiche au-dessus de ton joueur près du porteur</span>
@@ -6557,6 +6591,7 @@ function showOptions() {
       <b>J</b><span>Passe (maintenir pour un centre) ; sans ballon, change de joueur</span>
       <b>K</b><span>Tir, maintenir pour la puissance ; avec Maj, lob</span>
       <b>L</b><span>Passe en profondeur ; sans ballon, appel au pressing</span>
+      <b>I</b><span>Passe en profondeur lobée, par-dessus la défense</span>
       <b>T G F H</b><span>Effet haut, bas, gauche, droite : maintenir pendant le tir ou la passe (manette : stick droit)</span>
       <b>Espace</b><span>Tacle glissé (chance de 0 à 100 %) ; avec le ballon, dribble au hasard parmi 31 gestes (chance de réussite affichée de 0 à 100 %)</span>
       <b>Espace (défense)</b><span>Sur un tir : arrêt du gardien (plongeon, détente, étoile, au sol ; direction pour forcer le côté). Sur une percée ou un centre : sortie</span>
@@ -6827,7 +6862,7 @@ const netSend = o => netSendRaw(JSON.stringify(o));
 function netFwd(name, ...a) { if (!netGuest()) return false; netSend({ k: 'a', n: name, a }); return true; }
 // The guest's buttons, run on the host with the guest's controls swapped in
 const NET_ACTS = {
-  pressPass, releasePass: sw => { act.passSwipe = !!sw; releasePass(); }, pressThru, releaseThru, pressShoot, releaseShoot, pressTackle,
+  pressPass, releasePass: sw => { act.passSwipe = !!sw; releasePass(); }, pressThru, releaseThru, pressLob, pressShoot, releaseShoot, pressTackle,
   pressAerial: t => { if (['header', 'volley', 'bike'].includes(t)) pressAerial(t); },
   zone: z => { shotZone = z && ZONES[z.i] ? { i: z.i, x: ZONES[z.i][0], y: ZONES[z.i][1] } : null; },
   skipIntro: () => withCtx(0, skipIntro), endReplay: () => withCtx(0, endReplay)
