@@ -1031,6 +1031,10 @@ function kick(p, vx, vy, vz, opts) {
   touch(p);
   modelKick(p, opts);
   if (p === ctrl && p.t === 0) buzz(12);
+  // Struck from in front of the kicking foot, not from where the dribble had pushed it
+  if (ball.owner === p && !ball.held && ball.z < 0.2 && !(p.mustPass && setKind === 'throw')) {
+    const off = 0.32; ball.x = p.x + p.fx * off; ball.y = p.y + p.fy * off;
+  }
   ball.owner = null; ball.held = false;
   ball.vx = vx; ball.vy = vy; ball.vz = vz; ball.z = Math.max(0, ball.z); ball.spin = opts.spin || 0;
   ball.tspin = opts.tspin || 0; ball.knuck = opts.knuck || 0; ball.knPh = Math.random() * 6.3;
@@ -1130,7 +1134,7 @@ function gkMaxZ(p) {
 function gkReach(p) {
   if (p.dive > 0) return 1.7 + p.diveLift * 0.3 + (p.diveBonus ? 0.35 : 0) + tv(p, 'envergure') * 0.12;
   if (p.gkaT > 0 && p.gka === 'star') return 1.75;
-  return 1.3;
+  return 1.05;
 }
 function landingPt(h) {
   if (ball.owner) return null;
@@ -1317,7 +1321,8 @@ function shotChance(p, power, pen, dGoal, chip) {
   const c = 1.0 - Math.max(0, dGoal - 8) * 0.016 - pressureOn(p) * 0.35 - Math.max(0, power - 0.82) * 1.5 - (1 - p.stamina) * 0.15
     + (sk(p, 'tir') - 0.75) * 0.95 - Math.max(0, wide - 12) * 0.02 - (chip ? 0.1 : 0) - (ball.z > 0.4 ? 0.12 : 0) - weatherPen() + teamAdj(p)
     + (dGoal > 20 ? Math.min(dGoal - 20, 15) * 0.006 * tv(p, 'loin') : 0) + (dGoal < 14 ? tv(p, 'renard') * 0.05 : 0)
-    + (chip ? tv(p, 'pique') * 0.07 : 0) + (ball.z > 0.4 ? tv(p, 'acrobate') * 0.07 : 0) + (subv(p, dGoal > 20 ? 'loin' : 'fin') - 0.75) * 0.2;
+    + (chip ? tv(p, 'pique') * 0.07 : 0) + (ball.z > 0.4 ? tv(p, 'acrobate') * 0.07 : 0) + (subv(p, dGoal > 20 ? 'loin' : 'fin') - 0.75) * 0.2
+    + (p.t === 0 ? 0.12 : 0);
   return clamp(c, 0, 1);
 }
 // Where a lofted ball lands, using the same drag, Magnus force and wind as the real flight (wk = share of wind the passer allows for)
@@ -1361,7 +1366,7 @@ function passTo(p, m, lofted, sp) {
   const show = p === ctrl && p.t === 0;
   if (throwIn) sp = null;
   let v, vz, spin = 0, tspin = 0;
-  if (throwIn) { v = clamp(d * 0.9 + 5, 8, 18); vz = 2.6; }
+  if (throwIn) { v = clamp(d * 0.9 + 5, 8, 18); vz = 2.6; ball.z = 1.8; }
   else if (lofted) {
     vz = clamp(5 + d * 0.17, 6, 13); v = d * 0.72 / (2 * vz / G);
     // ▲ lobbed pass: higher arc with backspin so it drops softly over the defenders
@@ -1382,10 +1387,10 @@ function passTo(p, m, lofted, sp) {
     const dd = Math.hypot(dx, dy) || 1, nx = -dy / dd, ny = dx / dd;
     dx -= nx * disp; dy -= ny * disp;
   }
-  let err = (p === ctrl ? 0.022 : 0.035) * errMul(p) * (lofted ? 1.6 : 1) * (1 + pressureOn(p));
+  let err = (p === ctrl ? 0.011 : 0.035) * errMul(p) * (lofted ? 1.6 : 1) * (1 + pressureOn(p));
   let ang = Math.atan2(dy, dx);
   if (!throwIn) {
-    const c = clamp(passChance(p, m, lofted, d, tx, ty) - (sp ? 0.04 : 0), 0, 1), q = rollTier(c);
+    const c = clamp(passChance(p, m, lofted, d, tx, ty) - (sp ? 0.04 : 0) + (show ? 0.2 : 0), 0, 1), q = rollTier(c);
     if (q === 3) err *= 0.2;
     else if (q === 2) err *= 0.6;
     else if (q === 1) { err *= 1.6; v *= rnd(0.82, 1.22); }
@@ -1612,7 +1617,7 @@ function dribbleChance(p, m, no) {
   let c = 0.97 - (m.stars - 1) * 0.08 + (sk(p, 'dri') - 0.75) * 0.85 - pressure * 0.32 - def * pressure * 0.5 - (1 - p.stamina) * 0.3 - over * 0.3;
   c += tv(p, 'technique') * 0.06 + (subv(p, 'agi') - 0.75) * 0.1;
   if (p.t === 1) c += (diff.think - 1) * 0.12;
-  else c += 0.1;
+  else c = Math.max(c + 0.3, 0.88);
   if (wx !== 'clair') c -= 0.05 * (m.stars / 3);
   return clamp(c, 0, 1);
 }
@@ -1655,7 +1660,7 @@ function dribbleOutcome(p) {
       ball.owner = null; ball.held = false; ball.vx = bvx; ball.vy = bvy; ball.vz = bvz; ball.z = Math.max(ball.z, 0.05);
       ball.last = p.t; ball.shot = null; ball.target = null; ball.spin = ball.tspin = ball.knuck = 0; ball.offside = null;
       p.cool = 0.28; sfxKick(5);
-      if (q >= 1) giveBack(p, 1.8);
+      if (q >= 1) { giveBack(p, 1.8); if (p.t === 0) ball.protectT = time + 0.7; }
     }
     if (q >= 2 && m.knock.v === 'through' && no.p) { no.p.stun = Math.max(no.p.stun, 0.9); no.p.cool = 1; }
     if (q >= 2) beatDefenders(p, 3.6, q === 3 ? 1.2 : 0.8, 1, true);
@@ -1736,14 +1741,14 @@ function endDribble(p) {
   if (ball.owner === p) ball.z = 0;
   p.dmove = null; p.skillT = 0;
 }
-function bestPass(p, dir) {
+function bestPass(p, dir, minAlign) {
   let best = null; const ad = TEAMS[p.t].dir;
   for (const m of players) {
     if (m.t !== p.t || m === p) continue;
     const dx = m.x - p.x, dy = m.y - p.y, d = Math.hypot(dx, dy);
     if (d < 4 || d > 48) continue;
     let align = 0;
-    if (dir) { align = (dx * dir.x + dy * dir.y) / d; if (align < 0.4) continue; }
+    if (dir) { align = (dx * dir.x + dy * dir.y) / d; if (align < (minAlign ?? 0.4)) continue; }
     else if (m.role === 'GK') continue;
     let open = 6;
     for (const o of players) {
@@ -1972,6 +1977,7 @@ function tryControl() {
   let best = null, bd = 1e9;
   for (const p of players) {
     if (p.cool > 0 || p.stun > 0 || p.aero) continue;
+    if (ball.protectT && time < ball.protectT && p.t === 1 && p.role !== 'GK') continue;   // a dribble you just won
     if (shootout && shootout.kicked && p.role !== 'GK') continue;
     const gkBox = p.role === 'GK' && inOwnBox(p);
     if (gkBox && ball.shot && ball.shot.beaten === p) continue;
@@ -1980,7 +1986,8 @@ function tryControl() {
     if (p.wall && jh > 0.3 && ball.z < 0.45 * jh) continue;
     // A low shot skids under a wall that jumped
     if (p.wall && p.jumpAt != null && time - p.jumpAt < 0.8 && ball.z < 0.3) continue;
-    const reach = gkBox ? gkReach(p) : 0.95;
+    const cutting = ball.target && ball.target.t === 0 && p.t === 1 && !gkBox;
+    const reach = gkBox ? gkReach(p) : cutting ? 0.55 : 0.95;
     if (ball.z > (gkBox ? gkMaxZ(p) : p.wall ? 1.95 + 0.5 * jh : 1.3)) continue;
     const d = dist(p, ball);
     if (d < reach && d < bd) { bd = d; best = p; }
@@ -1999,7 +2006,8 @@ function tryControl() {
       : clamp(0.98 - Math.max(0, sp - 18) * 0.025 - Math.abs(ball.y - 34) / GH * 0.18 - Math.max(0, z - 1.6) * 0.12
         - (bd > 1.3 && !diving ? 0.15 : 0) - (close ? 0.12 : 0) - (chip ? 0.1 : 0) - (wx === 'pluie' ? 0.05 : 0)
         - Math.min(0.08, Math.abs(ball.spin) * 0.012) - (ball.knuck ? 0.08 : 0) - (ball.tspin > 0 && z > 1.2 ? 0.05 : 0) - Math.min(0.05, wind.s * 0.004)
-        + gkBonus(best) * 1.5 + (diving ? 0.05 + best.diveBonus : 0) + (best.saveBonusT > 0 ? best.saveBonus : 0) + (sk(best, 'def') - 0.7) * 0.6, 0, 1);
+        + gkBonus(best) * 1.5 + (diving ? 0.05 + best.diveBonus : 0) + (best.saveBonusT > 0 ? best.saveBonus : 0) + (sk(best, 'def') - 0.7) * 0.6
+        - (ball.shot.t === 0 ? 0.14 : 0), 0, 1);
     const pct = Math.round(chance * 100);
     const roll = Math.random();
     slowMo(0.8, 0.4, best);
@@ -2013,6 +2021,8 @@ function tryControl() {
       return;
     }
     const shooter = ball.toucher, assist = ball.assist;
+    // He goes to the ball: a quick lunge over the remaining gap (the ball is also drawn sliding into his hands)
+    if (bd > 0.55) best.lunge = { x: ball.x - (ball.x - best.x) / bd * 0.5, y: ball.y - (ball.y - best.y) / bd * 0.5, t: 0.2 };
     sfxKick(9); crowdSwell(0.35, 1.2); touch(best); sfxOoh();
     const mg = (chance - roll) / (chance || 1);
     const tier = mg > 0.6 ? 3 : mg > 0.3 ? 2 : mg > 0.1 ? 1 : 0;
@@ -2081,7 +2091,7 @@ function tryControl() {
     const rel = Math.hypot(ball.vx - best.vx, ball.vy - best.vy);
     const heavy = clamp((rel - 14) * 0.025 + (ball.z > 0.45 ? 0.1 : 0) + (0.8 - subv(best, 'ctl')) * 0.5 + pressureOn(best) * 0.08
       + (wx === 'pluie' ? 0.04 : wx === 'neige' ? 0.06 : 0) - tv(best, 'technique') * 0.04, 0, 0.5);
-    if (Math.random() < heavy) {
+    if (Math.random() < heavy * (best.t === 0 && ball.last === 0 ? 0.25 : 1)) {
       // Heavy touch: the ball bounces off the foot or the chest and runs away
       const a = Math.atan2(ball.vy, ball.vx) + gauss() * 0.9, v = rnd(2.5, 5.5) + rel * 0.12;
       ball.vx = Math.cos(a) * v; ball.vy = Math.sin(a) * v; ball.vz = ball.z > 0.45 ? rnd(0.8, 2) : rnd(0, 0.6);
@@ -2443,9 +2453,9 @@ function getMode() {
   if (ball.owner === ctrl && !ball.held) return 'passe';
   return 'changer';
 }
-let assistPick = 'oui';
+let assistPick = 'oui', stickT = 0;   // time since the stick was last moved (survives player switches)
 function assistNow(p) {
-  return assistPick === 'oui' && state === 'play' && p.role !== 'GK' && idleT > 0.4 && getInput().m < 0.15
+  return assistPick === 'oui' && state === 'play' && p.role !== 'GK' && idleT > 0.4 && stickT > 0.4 && getInput().m < 0.15
     && (!ball.owner || ball.owner.t !== p.t) && !ball.held && p.slide <= 0 && p.stun <= 0 && !p.dmove && !p.aero && !p.wall;
 }
 function humanMove(p, dt) {
@@ -2481,10 +2491,13 @@ function humanMove(p, dt) {
     const spd = (sprint ? 8.5 : 6.4) * fac * (own ? (sprint ? 0.86 : 0.92) : 1) * Math.min(1, inp.m);
     const turn = (inp.x * p.vx + inp.y * p.vy) < 0 ? 0.4 + subv(p, 'agi') * 0.25 : 1;
     const a = Math.min(1, dt * (own ? 5.5 : 7.5) * turn * (0.72 + subv(p, 'acc') * 0.38));
-    p.vx += (inp.x * spd - p.vx) * a; p.vy += (inp.y * spd - p.vy) * a;
+    p.vx += (inp.x * spd - p.vx) * a; p.vy += (inp.y * spd - p.vy) * a; stickT = 0;
   } else {
     idleT += dt; p.stamina = Math.min(1, p.stamina + dt * 0.08);
-    if (idleT > 0.4 && ball.owner !== p) aiMove(p, dt); else steer(p, p.x, p.y, 0, dt);
+    stickT += dt;
+    // "Jeu assisté": stick released with the ball, the player dribbles, passes and shoots on his own (team-mates carry on too)
+    const carry = ball.owner === p && assistPick === 'oui' && state === 'play' && !p.mustPass && !ball.held && stickT > 0.8;
+    if ((idleT > 0.4 && ball.owner !== p) || carry) aiMove(p, dt); else steer(p, p.x, p.y, 0, dt);
   }
 }
 function switchPlayer() { const n = nearestTo(0, ball, true, ctrl); if (n) setCtrl(n); idleT = 0; }
@@ -2508,7 +2521,8 @@ function humanPass(p, hold) {
   const dir = inputDir(p);
   const sp = getSpin('pass'), power = clamp((hold - 0.22) / 0.7, 0, 1);
   const lob = sp && !sp.side ? sp.top > 0 : hold > 0.22;
-  const bp = bestPass(p, dir);
+  // Pointing roughly towards someone is enough: widen the cone, then any open team-mate
+  const bp = bestPass(p, dir) || bestPass(p, dir, -0.2) || bestPass(p, null);
   if (bp) { passTo(p, bp.p, lob, sp); return; }
   const o = { spin: sp && sp.side ? sp.side * 4 : 0, tspin: sp && sp.top > 0 ? -0.9 : sp && sp.top < 0 ? 0.6 : 0 };
   if (lob) {
@@ -3477,6 +3491,10 @@ function step(dt) {
         }
       }
     }
+    if (p.lunge) {
+      const lg = p.lunge, k = Math.min(1, dt / Math.max(dt, lg.t));
+      p.x += (lg.x - p.x) * k; p.y += (lg.y - p.y) * k; lg.t -= dt; if (lg.t <= 0) p.lunge = null;
+    }
     if (p.role === 'GK' && p.dive > 0) {
       if (diveK(p) < DIVE_FLY) { p.vx = p.diveVx || 0; p.vy = p.diveVy; }
       else { if (!p.landed) { p.landed = true; if (actx) thump(90, 0.25, 0.12); } const f = Math.exp(-dt * 9); p.vx *= f; p.vy *= f; }
@@ -3775,9 +3793,10 @@ function mAct(m, key) {
   return a;
 }
 // One strike / pass clip per kick; the foot meets the ball about 0.1 s after the chosen start time
-const KICK_EV = { throwIn: [1.25, 2.2], pass: [0.28, 1.1], kick: [0.25, 1.0], penalty: [0.67, 1.45] };
+// Contact frames measured on the clips: kick 0.40 s, pass 0.43 s, penalty 0.73 s (the clip starts just before it)
+const KICK_EV = { throwIn: [1.25, 2.2], pass: [0.4, 1.1], kick: [0.37, 1.0], penalty: [0.7, 1.45] };
 function modelKick(p, opts) {
-  p.kickKey = state === 'set' && setKind === 'throw' ? 'throwIn' : opts.target && !opts.shot ? 'pass' : p.mustPass && setKind === 'penalty' && mdl && mdl.clips.penalty ? 'penalty' : 'kick';
+  p.kickKey = setKind === 'throw' && p.mustPass ? 'throwIn' : opts.target && !opts.shot ? 'pass' : p.mustPass && setKind === 'penalty' && mdl && mdl.clips.penalty ? 'penalty' : 'kick';
   p.kickT = time;
 }
 // What the body does this frame: a timed move (dive, slide, header...) or a blend of idle / jog / run / backwards / sideways
@@ -3817,7 +3836,7 @@ function modelMove(p, m, celebrate) {
   }
   if (p.dmove && p.skillT > 0 && p.dmove.key === 'roulette' && mdl.clips.spin) return ['spin', 0.1 + (1 - p.skillT / p.dmove.dur) * 1.05];
   if (ball.held && ball.owner === p) return ['catch', 0.95];                           // keeper holding the ball against his chest
-  if (state === 'set' && setKind === 'throw' && ball.owner === p) return ['throwIn', 1.0];
+  if (setKind === 'throw' && p.mustPass && ball.owner === p && (state === 'set' || state === 'play')) return ['throwIn', 1.0];   // ball held overhead until thrown
   if (p.kickKey && time - p.kickT < KICK_EV[p.kickKey][1] - KICK_EV[p.kickKey][0]) return [p.kickKey, KICK_EV[p.kickKey][0] + time - p.kickT];
   if (p.recvT != null && time - p.recvT < 0.55) return ['receive', 0.05 + time - p.recvT];
   return null;
@@ -5591,6 +5610,7 @@ function proj(x, y, z) {
   return [(tmpV.x + 1) / 2 * cw, (1 - tmpV.y) / 2 * ch, tmpV.z < 1];
 }
 function tackleReady() { return !!(ctrl && ball.owner && ball.owner.t !== ctrl.t && !ball.held && dist(ctrl, ball) < 3); }
+const _hA = new THREE.Vector3(), _hB = new THREE.Vector3();
 function syncScene(dt) {
   const now = performance.now();
   for (const [p, f] of figs) if (!players.includes(p)) { scene.remove(f); figs.delete(p); }
@@ -5626,6 +5646,14 @@ function syncScene(dt) {
   lines.forEach((l, k) => pose(lineFigs[k], l.x, l.y, 0, l.y < 0 ? 1 : -1, l.phase, l.v || 0, 0, { flag: l.flag > 0 }));
   const bx = lerpP(ball.px, ball.x), by = lerpP(ball.py, ball.y), bz = Math.max(0, lerpP(ball.pz, ball.z));
   ballMesh.position.set(bx - L2, bz + BR, by - W2);
+  // Held ball (keeper, throw-in): drawn between the player's real hands, sliding there over a few frames rather than jumping
+  const ho = ball.owner, hm = ho && (ball.held || (setKind === 'throw' && ho.mustPass && (state === 'set' || state === 'play'))) ? models.get(ho) : null;
+  if (hm && hm.bones.LeftHand && hm.bones.RightHand) {
+    hm.bones.LeftHand.getWorldPosition(_hA); hm.bones.RightHand.getWorldPosition(_hB); _hA.add(_hB).multiplyScalar(0.5);
+    _hA.x += ho.fx * 0.06; _hA.z += ho.fy * 0.06;
+    ballMesh.userData.hk = Math.min(1, (ballMesh.userData.hk || 0) + (dt || 0) * 7);
+    ballMesh.position.lerp(_hA, ballMesh.userData.hk);
+  } else ballMesh.userData.hk = 0;
   // Roll by the distance actually travelled (angle = distance / radius), so it also turns right in slow motion
   const mdx = bx - (ballMesh.userData.lx ?? bx), mdy = by - (ballMesh.userData.ly ?? by), md = Math.hypot(mdx, mdy);
   ballMesh.userData.lx = bx; ballMesh.userData.ly = by;
@@ -6461,7 +6489,7 @@ function showOptions() {
       <b>Passe</b><span>Toucher pour une passe au sol, glisser le doigt sur le bouton pour une passe en profondeur ; sans ballon, prend le joueur le plus proche du ballon</span>
       <b>Tir</b><span>Maintenir pour charger : plus c’est long, plus c’est fort et haut ; oriente le joystick pour viser. Sur un ballon en l’air, Tir fait une volée, une retournée ou une tête</span>
       <b>Tête</b><span>Bouton jaune qui apparaît quand un ballon aérien arrive</span>
-      <b>Défense assistée</b><span>Lâche le joystick quand l’adversaire a le ballon : ton joueur presse et tacle tout seul</span>
+      <b>Jeu assisté</b><span>Lâche le joystick : sans ballon ton joueur presse et tacle tout seul, avec le ballon il dribble, passe et tire tout seul</span>
       <b>Zone de tir</b><span>Touche une case du petit but (en haut / en bas × gauche / centre / droite) avant de tirer ; au clavier 1-3 en haut, 4-6 en bas, 0 automatique</span>
       <b>Tacle</b><span>Sa chance de réussite (0 à 100 %) s’affiche au-dessus de ton joueur près du porteur</span>
       <b>Sprint + Tir</b><span>Lob par-dessus le gardien</span>
@@ -6502,7 +6530,7 @@ function showOptions() {
     <div class="opt"><span>Météo</span>${seg('wx', [['surprise', 'Surprise'], ['clair', 'Clair'], ['pluie', 'Pluie'], ['neige', 'Neige']], weatherPick)}</div>
     <div class="opt" id="rowVenue"><span>Lieu</span>${seg('venue', [['stade', 'Stade'], ['entrainement', 'Entraînement']], venuePick)}</div>
     <div class="opt"><span>Horaire</span>${seg('time', [['jour', 'Jour'], ['nuit', 'Nocturne']], timePick)}</div>
-    <div class="opt"><span>Défense assistée</span>${seg('assist', [['oui', 'Oui'], ['non', 'Non']], assistPick)}</div>
+    <div class="opt"><span>Jeu assisté</span>${seg('assist', [['oui', 'Oui'], ['non', 'Non']], assistPick)}</div>
     <details${isTouch ? '' : ' open'}><summary>Commandes</summary><div class="keys">${isTouch ? touchKeys : kbKeys}</div></details>
     <button class="cta" id="btnStart">Coup d’envoi</button>`;
   overlay.hidden = false;
@@ -6631,7 +6659,7 @@ window.__game = {
   get state() { return state; }, set state(v) { state = v; }, get score() { return score; }, get stats() { return stats; }, get clock() { return clock; }, get half() { return half; },
   setDiff(k) { diffKey = k; diff = DIFFS[k]; }, setMin(m) { matchMin = m; },
   endReplay, replayTick, updateCam, startHighlight, shoot, shotHeight, markHighlight, setPiece, get ctrl() { return ctrl; }, get models() { return models; }, get rp() { return rp; }, get time() { return time; },
-  get shootout() { return shootout; }, get players() { return players; }, get camera() { return camera; }, gkAction, doSkill, get ball() { return ball; }, setClock(c) { clock = c; if (c >= 45) half = 2; }
+  get shootout() { return shootout; }, get players() { return players; }, get camera() { return camera; }, get ballMesh() { return ballMesh; }, gkAction, doSkill, get ball() { return ball; }, setClock(c) { clock = c; if (c >= 45) half = 2; }
 };
 })();
 </script>
