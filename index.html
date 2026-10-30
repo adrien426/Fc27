@@ -265,7 +265,13 @@ select.name{width:230px;cursor:pointer}
 .cupline{font-size:19px;font-weight:700;margin:0 0 12px;padding:8px 10px;border-radius:4px;background:var(--chip)}
 .cupline span{display:block;font-weight:500;color:var(--muted);font-size:17px}
 .card.wide{max-width:820px}
-.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:4px 0 0}
+.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:4px 0 0}
+@media (max-width:760px){.modes{grid-template-columns:repeat(2,1fr)}}
+.netwait{display:flex;flex-direction:column;align-items:center;gap:14px;margin:18px 0 8px;text-align:center}
+.netwait .spin{width:58px;height:58px;border-radius:50%;border:6px solid var(--line);border-top-color:var(--cta);animation:netspin 1s linear infinite}
+.netwait b{font-size:24px;font-weight:800}.netwait span{font-size:17px;color:var(--muted)}
+@keyframes netspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.netwait .spin{animation-duration:3s}}
 .mcard{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;border:2px solid var(--line);border-radius:8px;background:var(--chip);color:var(--ink);
   font-family:var(--font);padding:16px 14px 18px;cursor:pointer;transition:transform .12s,border-color .12s}
 .mcard:hover{border-color:var(--ink);transform:translateY(-2px)}
@@ -828,6 +834,9 @@ if (isTouch) app.classList.add('touch');
 
 // ---------- State ----------
 let players = [], ctrl = null, roles = [{}, {}];
+// Online: HT is the team the live controls (ctrl, act, idleT...) belong to; the host swaps in the guest's while it runs them. rin is the guest's remote input
+let HT = 0, rin = null, net = null;
+const CTX = [null, null];
 const ball = { x: L / 2, y: W / 2, z: 0, vx: 0, vy: 0, vz: 0, spin: 0, tspin: 0, knuck: 0, knPh: 0, owner: null, held: false, last: 0, rot: 0, target: null, shot: null, offside: null, wallPass: false, toucher: null, assist: null };
 const ref = { x: L / 2 - 8, y: W / 2 + 10, vx: 0, vy: 0, fx: 1, fy: 0, phase: 0 };
 const lines = [{ x: L / 4, y: -1.4, flag: 0, phase: 0 }, { x: 3 * L / 4, y: W + 1.4, flag: 0, phase: 0 }];
@@ -846,7 +855,7 @@ function newStats() { return { shots: [0, 0], onTarget: [0, 0], poss: [0, 0], fo
 // ---------- Setup ----------
 function makePlayers() {
   players = []; let id = 0;
-  const rosters = [myRoster(), genRoster(clubOvr(oppName), oppName)];
+  const rosters = [myRoster(), matchMode === 'online' && net && net.opp ? net.opp.roster : genRoster(clubOvr(oppName), oppName)];
   for (let t = 0; t < 2; t++) FORM.forEach((f, i) => {
     const role = f[2], rp = normPlayer(rosters[t][i], f[2]), st = Object.assign({}, rp.st);
     const tb = {}; for (const tr of rp.traits) for (const k in TRAITS[tr].bonus) tb[k] = (tb[k] || 0) + TRAITS[tr].bonus[k] * (rp.plus.includes(tr) ? 1.6 : 1);
@@ -881,7 +890,7 @@ function nearestTo(team, pt, noGK, exclude) {
   return best;
 }
 const gkOf = t => players.find(p => p.t === t && p.role === 'GK');
-function setCtrl(p) { if (p && p !== ctrl) { ctrl = p; idleT = 0; } }
+function setCtrl(p) { if (p && p.t !== HT && CTX[p.t]) { withCtx(p.t, () => setCtrl(p)); return; } if (p && p !== ctrl) { ctrl = p; idleT = 0; } }
 function resetBall(x, y) {
   Object.assign(ball, { x, y, z: 0, vx: 0, vy: 0, vz: 0, spin: 0, owner: null, held: false, target: null, shot: null, offside: null, toucher: null, assist: null });
 }
@@ -899,13 +908,14 @@ function kickoff(team, silent) {
   if (mate) { mate.x = L / 2 - d * 2.5; mate.y = W / 2 + 7; }
   ball.owner = tk; ball.last = team; tk.mustPass = true;
   state = 'set'; setT = 1.4; setKind = 'kickoff'; cornerMode = null;
-  if (team === 0) setCtrl(tk); else setCtrl(nearestTo(0, ball, true));
+  for (const ht of humanTeams()) withCtx(ht, () => setCtrl(team === HT ? tk : nearestTo(HT, ball, true)));
   replayChip.style.display = 'none'; rp = null; passChain = [0, 0]; slowT = 0; slowScale = 1; actCam = null;
   for (const p of players) p.lab = null;
   if (!silent) whistle(0.35);
 }
 function prepareOpponent() {
   matchMode = modePick;
+  if (matchMode === 'online') { diff = NET_DIFF; oppName = net.opp.name; oppKitKey = net.opp.kit; return; }
   if (matchMode === 'coupe') {
     if (!cup) cup = newCup();
     oppName = cup.opps[cup.round]; oppKitKey = pickOppKit(cup.seed + cup.round * 3);
@@ -949,7 +959,7 @@ function ldcTableHTML() {
 function newCup() { return { round: 0, opps: CLUBS.filter(n => n !== myPick).sort(() => Math.random() - 0.5).slice(0, 3), seed: (Math.random() * 100) | 0 }; }
 function startMatch() {
   prepareOpponent();
-  wx = weatherPick === 'surprise' ? pickOf(['clair', 'clair', 'pluie', 'neige']) : weatherPick; WX = WEATHERS[wx];
+  wx = weatherPick === 'surprise' || matchMode === 'online' ? pickOf(['clair', 'clair', 'pluie', 'neige']) : weatherPick; WX = WEATHERS[wx];
   setupWind();
   applyTeams(); tipShown = false; applyAtmosphere(); setRainSound();
   goalsLog = []; shootout = null; passChain = [0, 0];
@@ -1055,7 +1065,7 @@ function kick(p, vx, vy, vz, opts) {
     const gk = gkOf(1 - p.t);
     if (gk) {
       gk.penGK = false; gk.penT = 0.75;
-      if (gk.t === 0 && !window.__auto) { const inp = getInput(); gk.penSide = Math.abs(inp.y) > 0.3 ? Math.sign(inp.y) : 0; }
+      if (humanTeam(gk.t) && !window.__auto) { const inp = withCtx(gk.t, getInput); gk.penSide = Math.abs(inp.y) > 0.3 ? Math.sign(inp.y) : 0; }
       else {
         const r = Math.random(), right = Math.sign(vy) || 0;
         gk.penSide = (diffKey === 'difficile' && r < 0.18) ? right : r < 0.42 ? -1 : r < 0.58 ? 0 : 1;
@@ -1235,20 +1245,20 @@ function sweeperClear(gk) {
 }
 function gkHint() {
   if (state !== 'play') return null;
-  const gk = gkOf(0);
+  const gk = gkOf(HT);
   if (!gk || gk.dive > 0 || gk.gkaT > 0 || gk.pend || gk.stun > 0) return null;
-  if (shotThreat(0) && inOwnBox(gk)) return 'save';
+  if (shotThreat(HT) && inOwnBox(gk)) return 'save';
   if (ctrl && ball.owner === ctrl) return null;
   const o = ball.owner;
-  if (o && o.t !== 0 && !ball.held && inBoxOf(0, o.x, o.y) && !tackleReady() && !(gk.rushT > 0)) return 'out';
-  if (!ball.owner && ball.last !== 0 && ball.z > 0.8 && !(gk.claimT > 0)) { const lp = landingPt(2); if (lp && inBoxOf(0, lp.x, lp.y)) return 'out'; }
+  if (o && o.t !== HT && !ball.held && inBoxOf(HT, o.x, o.y) && !tackleReady() && !(gk.rushT > 0)) return 'out';
+  if (!ball.owner && ball.last !== HT && ball.z > 0.8 && !(gk.claimT > 0)) { const lp = landingPt(2); if (lp && inBoxOf(HT, lp.x, lp.y)) return 'out'; }
   return null;
 }
 function pressSave() {
-  const gk = gkOf(0), hint = gkHint();
+  const gk = gkOf(HT), hint = gkHint();
   if (!hint) return false;
   if (hint === 'save') {
-    const th = shotThreat(0), inp = getInput();
+    const th = shotThreat(HT), inp = getInput();
     const at = time + Math.max(0, th.tl - 0.38);
     let ty = th.y, label = 'Plongeon !', fn;
     if (inp.m > 0.3 && Math.abs(inp.y) > 0.3) ty = gk.y + Math.sign(inp.y) * 3.2;
@@ -1263,7 +1273,7 @@ function pressSave() {
     return true;
   }
   const o = ball.owner;
-  if (o && o.t !== 0) { gk.rushT = 1.8; fxLabel(gk, 'Sortie !', '#2fb6c9', 1.2); return true; }
+  if (o && o.t !== HT) { gk.rushT = 1.8; fxLabel(gk, 'Sortie !', '#2fb6c9', 1.2); return true; }
   gk.claimT = 1.6; fxLabel(gk, 'Sortie aérienne', '#2fb6c9', 1.2);
   return true;
 }
@@ -1281,7 +1291,7 @@ function rollTier(c) {
   if (r < c) return (c - r) / (c || 1) > 0.55 ? 3 : 2;
   return (r - c) / ((1 - c) || 1) < 0.45 ? 1 : 0;
 }
-function teamAdj(p) { return p.t === 0 ? 0.05 : -(diff.err - 1) * 0.12; }
+function teamAdj(p) { return humanTeam(p.t) ? 0.05 : -(diff.err - 1) * 0.12; }
 function laneRisk(p, tx, ty) {
   let r = 0;
   for (const o of players) {
@@ -1299,6 +1309,7 @@ function actLabel(p, kind, c, q, res, show) {
 }
 // ---------- Directional spin (touch arrows, T/G/F/H keys, right stick) ----------
 function getSpin(kind) {
+  if (rin) return (rin.sp && rin.sp[kind]) || null;
   const t = act.spinDir && act.spinDir[kind];
   if (t) return t;
   let sx = (keys.spR ? 1 : 0) - (keys.spL ? 1 : 0), sy = (keys.spU ? 1 : 0) - (keys.spD ? 1 : 0);
@@ -1335,7 +1346,7 @@ function shotChance(p, power, pen, dGoal, chip) {
     + (sk(p, 'tir') - 0.75) * 0.95 - Math.max(0, wide - 12) * 0.02 - (chip ? 0.1 : 0) - (ball.z > 0.4 ? 0.12 : 0) - weatherPen() + teamAdj(p)
     + (dGoal > 20 ? Math.min(dGoal - 20, 15) * 0.006 * tv(p, 'loin') : 0) + (dGoal < 14 ? tv(p, 'renard') * 0.05 : 0)
     + (chip ? tv(p, 'pique') * 0.07 : 0) + (ball.z > 0.4 ? tv(p, 'acrobate') * 0.07 : 0) + (subv(p, dGoal > 20 ? 'loin' : 'fin') - 0.75) * 0.2
-    + (p.t === 0 ? 0.12 : 0);
+    + (humanTeam(p.t) ? 0.12 : 0);
   return clamp(c, 0, 1);
 }
 // Where a lofted ball lands, using the same drag, Magnus force and wind as the real flight (wk = share of wind the passer allows for)
@@ -1376,7 +1387,7 @@ function passTo(p, m, lofted, sp) {
   const tx = clamp(m.x + m.vx * lead, 1, L - 1), ty = clamp(m.y + m.vy * lead, 1, W - 1);
   let dx = tx - ball.x, dy = ty - ball.y;
   const d = Math.hypot(dx, dy) || 1;
-  const show = p === ctrl && p.t === 0;
+  const show = isHum(p);
   if (throwIn) sp = null;
   let v, vz, spin = 0, tspin = 0;
   if (throwIn) { v = clamp(d * 0.9 + 5, 8, 18); vz = 2.6; ball.z = 1.8; }
@@ -1400,7 +1411,7 @@ function passTo(p, m, lofted, sp) {
     const dd = Math.hypot(dx, dy) || 1, nx = -dy / dd, ny = dx / dd;
     dx -= nx * disp; dy -= ny * disp;
   }
-  let err = (p === ctrl ? 0.011 : 0.035) * errMul(p) * (lofted ? 1.6 : 1) * (1 + pressureOn(p));
+  let err = (isHum(p) ? 0.011 : 0.035) * errMul(p) * (lofted ? 1.6 : 1) * (1 + pressureOn(p));
   let ang = Math.atan2(dy, dx);
   if (!throwIn) {
     const c = clamp(passChance(p, m, lofted, d, tx, ty) - (sp ? 0.04 : 0) + (show ? 0.2 : 0), 0, 1), q = rollTier(c);
@@ -1414,14 +1425,14 @@ function passTo(p, m, lofted, sp) {
   ang += gauss() * err;
   kick(p, Math.cos(ang) * v, Math.sin(ang) * v, vz, { target: m, spin, tspin });
   if (off) ball.offside = m;
-  if (m.t === 0) setCtrl(m);
+  if (humanTeam(m.t)) setCtrl(m);
 }
 function throughPass(p, m) {
   const d = TEAMS[p.t].dir, off = isOffside(m);
   const tx = clamp(m.x + d * rnd(7, 11) + m.vx * 0.4, 2, L - 2);
   const ty = clamp(m.y + (34 - m.y) * 0.15 + m.vy * 0.4, 2, W - 2);
   const dx = tx - ball.x, dy = ty - ball.y, dd = Math.hypot(dx, dy) || 1;
-  const show = p === ctrl && p.t === 0;
+  const show = isHum(p);
   let v = clamp(dd * 0.78 + 5, 9, 24), err = 0.03 * errMul(p), ang = Math.atan2(dy, dx);
   const c = throughChance(p, m, dd, tx, ty), q = rollTier(c);
   if (q === 3) err *= 0.2;
@@ -1433,7 +1444,7 @@ function throughPass(p, m) {
   if (show && q === 3) comment(`Passe en profondeur millimétrée de ${p.name} !`);
   kick(p, Math.cos(ang) * v, Math.sin(ang) * v, 0, { target: m });
   if (off) ball.offside = m;
-  if (m.t === 0) setCtrl(m);
+  if (humanTeam(m.t)) setCtrl(m);
 }
 // zh: target height at the goal line (from the shot-zone picker); undefined = automatic height from power
 function shoot(p, power, aimOff, curl, sp, zh) {
@@ -1673,7 +1684,7 @@ function dribbleOutcome(p) {
       ball.owner = null; ball.held = false; ball.vx = bvx; ball.vy = bvy; ball.vz = bvz; ball.z = Math.max(ball.z, 0.05);
       ball.last = p.t; ball.shot = null; ball.target = null; ball.spin = ball.tspin = ball.knuck = 0; ball.offside = null;
       p.cool = 0.28; sfxKick(5);
-      if (q >= 1) { giveBack(p, 1.8); if (p.t === 0) ball.protectT = time + 0.7; }
+      if (q >= 1) { giveBack(p, 1.8); if (humanTeam(p.t)) ball.protectT = time + 0.7; }
     }
     if (q >= 2 && m.knock.v === 'through' && no.p) { no.p.stun = Math.max(no.p.stun, 0.9); no.p.cool = 1; }
     if (q >= 2) beatDefenders(p, 3.6, q === 3 ? 1.2 : 0.8, 1, true);
@@ -1718,7 +1729,7 @@ function doSkill(p) {
   let pick = Math.random() * wts.reduce((a, b) => a + b, 0), m = pool[0];
   for (let i = 0; i < pool.length; i++) { pick -= wts[i]; if (pick <= 0) { m = pool[i]; break; } }
   let sx = -p.fy, sy = p.fx;
-  const inp = p === ctrl && !window.__auto ? getInput() : { m: 0 };
+  const inp = isHum(p) && !window.__auto ? withCtx(p.t, getInput) : { m: 0 };
   if (inp.m > 0.3) { if (inp.x * sx + inp.y * sy < 0) { sx = -sx; sy = -sy; } }
   else if (no.p) { if ((no.p.x - p.x) * sx + (no.p.y - p.y) * sy > 0) { sx = -sx; sy = -sy; } }
   else if (Math.random() < 0.5) { sx = -sx; sy = -sy; }
@@ -1734,7 +1745,7 @@ function doSkill(p) {
   else p.dribQ = (r - c) / ((1 - c) || 1) < 0.4 ? 1 : 0;
   p.dribDone = false;
   fxLabel(p, `${m.name} ${starStr(m.stars)} ${Math.round(c * 100)} %`, '#c9b6ff', m.dur + 0.2);
-  if (p === ctrl && p.t === 0 && m.stars >= 4) slowMo(m.dur, 0.7, p);
+  if (isHum(p) && m.stars >= 4) slowMo(m.dur, 0.7, p);
   sfxSwish();
 }
 function dribbleStep(p) {
@@ -1803,7 +1814,7 @@ function take(p, held) {
     // Heavy first touch
     ball.vx = ball.vx * 0.45 + gauss() * 1.5; ball.vy = ball.vy * 0.45 + gauss() * 1.5; ball.vz = 0.3;
     ball.last = p.t; ball.target = null; ball.shot = null; ball.spin = ball.tspin = ball.knuck = 0; p.cool = 0.2; touch(p);
-    if (p.t === 0) setCtrl(p);
+    if (humanTeam(p.t)) setCtrl(p);
     return;
   }
   const prevT = ball.last, prevTouch = ball.toucher;
@@ -1818,11 +1829,11 @@ function take(p, held) {
   } else if (!prevTouch || prevTouch.t !== p.t) passChain[p.t] = 0;
   ball.vz = 0; ball.z = held ? 0.9 : 0;
   p.holdT = held ? 1.1 : 0; p.dec = 0.12;
-  if (p.t === 0) { if (!held) setCtrl(p); }
-  else if (ctrl && dist(ctrl, ball) > 6) setCtrl(nearestTo(0, ball, true));
-  if (prevT !== p.t && p.t === 1) {
-    idleT = 0.5;
-    if (!tipShown && state === 'play') {
+  if (humanTeam(p.t) && !held) setCtrl(p);
+  for (const ht of humanTeams()) if (ht !== p.t) withCtx(ht, () => { if (ctrl && dist(ctrl, ball) > 6) setCtrl(nearestTo(HT, ball, true)); });
+  if (prevT !== p.t && humanTeam(1 - p.t)) {
+    withCtx(1 - p.t, () => { idleT = 0.5; });
+    if (!tipShown && state === 'play' && !net) {
       tipShown = true;
       showMsg('Récupère le ballon', 2.8, true, isTouch ? 'Approche-toi du porteur et appuie sur Tacle' : 'Approche-toi du porteur et appuie sur Espace pour tacler');
     }
@@ -1845,6 +1856,7 @@ const AERO = {
 };
 // The player commits to an aerial action: for 0.7 s he goes for the ball and strikes it as soon as it is in reach
 function pressAerial(type) {
+  if (netFwd('pressAerial', type)) return;
   if (state === 'replay') { endReplay(); return; }
   const p = ctrl;
   if (state !== 'play' || !p || p.aero || p.stun > 0 || p.slide > 0 || ball.owner === p || ball.held) return;
@@ -1902,7 +1914,7 @@ function aerialStrike(p, type) {
     const bp = bestPass(p, null);
     if (bp && dist(p, bp.p) < 22 && q >= 1) {
       const m = bp.p, dx = m.x - ball.x, dy = m.y - ball.y, dd = Math.hypot(dx, dy) || 1, v = clamp(dd * 0.75 + 5, 7, 17);
-      kick(p, dx / dd * v, dy / dd * v, type === 'header' ? 1.5 : 3, { target: m }); if (m.t === 0) setCtrl(m);
+      kick(p, dx / dd * v, dy / dd * v, type === 'header' ? 1.5 : 3, { target: m }); if (humanTeam(m.t)) setCtrl(m);
     } else kick(p, d * (12 + q * 3), gauss() * 4, type === 'header' ? 3 : 5);
     actLabel(p, `${A.lab}`, c, q, PASS_RES, true);
   }
@@ -1931,7 +1943,7 @@ function header(p) {
   if (bp && dist(p, bp.p) < 20) {
     const m = bp.p, dx = m.x - ball.x, dy = m.y - ball.y, dd = Math.hypot(dx, dy) || 1, v = clamp(dd * 0.8 + 4, 6, 15);
     kick(p, dx / dd * v, dy / dd * v, 2, { target: m });
-    if (m.t === 0) setCtrl(m);
+    if (humanTeam(m.t)) setCtrl(m);
   } else kick(p, d * 12, gauss() * 3, 3);
 }
 
@@ -1999,7 +2011,7 @@ function tryControl() {
     if (p.wall && jh > 0.3 && ball.z < 0.45 * jh) continue;
     // A low shot skids under a wall that jumped
     if (p.wall && p.jumpAt != null && time - p.jumpAt < 0.8 && ball.z < 0.3) continue;
-    const cutting = ball.target && ball.target.t === 0 && p.t === 1 && !gkBox;
+    const cutting = ball.target && humanTeam(ball.target.t) && p.t !== ball.target.t && !gkBox;
     const reach = gkBox ? gkReach(p) : cutting ? 0.55 : 0.95;
     if (ball.z > (gkBox ? gkMaxZ(p) : p.wall ? 1.95 + 0.5 * jh : 1.3)) continue;
     const d = dist(p, ball);
@@ -2020,7 +2032,7 @@ function tryControl() {
         - (bd > 1.3 && !diving ? 0.15 : 0) - (close ? 0.12 : 0) - (chip ? 0.1 : 0) - (wx === 'pluie' ? 0.05 : 0)
         - Math.min(0.08, Math.abs(ball.spin) * 0.012) - (ball.knuck ? 0.08 : 0) - (ball.tspin > 0 && z > 1.2 ? 0.05 : 0) - Math.min(0.05, wind.s * 0.004)
         + gkBonus(best) * 1.5 + (diving ? 0.05 + best.diveBonus : 0) + (best.saveBonusT > 0 ? best.saveBonus : 0) + (sk(best, 'def') - 0.7) * 0.6
-        - (ball.shot.t === 0 ? 0.14 : 0), 0, 1);
+        - (humanTeam(ball.shot.t) ? 0.14 : 0), 0, 1);
     const pct = Math.round(chance * 100);
     const roll = Math.random();
     slowMo(0.8, 0.4, best);
@@ -2104,13 +2116,13 @@ function tryControl() {
     const rel = Math.hypot(ball.vx - best.vx, ball.vy - best.vy);
     const heavy = clamp((rel - 14) * 0.025 + (ball.z > 0.45 ? 0.1 : 0) + (0.8 - subv(best, 'ctl')) * 0.5 + pressureOn(best) * 0.08
       + (wx === 'pluie' ? 0.04 : wx === 'neige' ? 0.06 : 0) - tv(best, 'technique') * 0.04, 0, 0.5);
-    if (Math.random() < heavy * (best.t === 0 && ball.last === 0 ? 0.25 : 1)) {
+    if (Math.random() < heavy * (humanTeam(best.t) && ball.last === best.t ? 0.25 : 1)) {
       // Heavy touch: the ball bounces off the foot or the chest and runs away
       const a = Math.atan2(ball.vy, ball.vx) + gauss() * 0.9, v = rnd(2.5, 5.5) + rel * 0.12;
       ball.vx = Math.cos(a) * v; ball.vy = Math.sin(a) * v; ball.vz = ball.z > 0.45 ? rnd(0.8, 2) : rnd(0, 0.6);
       ball.spin = ball.tspin = ball.knuck = 0; ball.shot = null; ball.target = null; ball.offside = null; ball.last = best.t;
       best.cool = 0.3; touch(best); sfxKick(5);
-      if (best.t === 0 || best === ctrl) fxLabel(best, 'Contrôle manqué', '#ffad47', 1.1);
+      if (humanTeam(best.t)) fxLabel(best, 'Contrôle manqué', '#ffad47', 1.1);
       return;
     }
   }
@@ -2162,14 +2174,14 @@ function aiTackles(dt) {
   const o = ball.owner;
   if (!o || ball.held || shootout) return;
   for (const p of players) {
-    if (p.t === o.t || (p === ctrl && !window.__auto && !assistNow(p)) || p.cool > 0 || p.stun > 0 || p.wall) continue;
+    if (p.t === o.t || (isHum(p) && !window.__auto && !humAssist(p)) || p.cool > 0 || p.stun > 0 || p.wall) continue;
     if (p.role === 'GK' && !inOwnBox(p)) continue;
     const d = dist(p, o);
     if (d > 1.45) continue;
     if (Math.random() < (p.t === 1 ? diff.tkRate : 1.1) * dt) {
       const behind = (o.fx * (p.x - o.x) + o.fy * (p.y - o.y)) / (d || 1) < -0.35;
       if (behind) continue; // A defender has to get goal-side before he can tackle
-      let succ = p.t === 1 ? (o === ctrl ? diff.tkSucc : 0.5) : 0.5;
+      let succ = p.t === 1 || netHost() ? (isHum(o) ? diff.tkSucc : 0.5) : 0.5;
       if (o.skillT > 0) succ *= o.dribQ >= 2 ? 0.2 : 0.55;
       if (o.dribSafeT > time) succ *= 0.5;
       if (o.dmove && o.dmove.airborne && o.dribQ >= 2) continue;
@@ -2183,15 +2195,15 @@ function aiTackles(dt) {
 function computeRoles() {
   const px = ball.x + ball.vx * 0.3, py = ball.y + ball.vy * 0.3;
   for (let t = 0; t < 2; t++) {
-    const humanActive = t === 0 && ctrl && ctrl.role !== 'GK' && idleT < 0.4 && !window.__auto;
+    const hs = humState(t), hc = hs && hs.c, humanActive = !!(hc && hc.role !== 'GK' && hs.idle < 0.4 && !window.__auto);
     let a = null, ad = 1e9, b = null, bd = 1e9;
     for (const p of players) {
       if (p.t !== t || p.role === 'GK' || p.wall) continue;
-      if (humanActive && p === ctrl) continue;
+      if (humanActive && p === hc) continue;
       const d = Math.hypot(p.x - px, p.y - py) + (p.stun > 0 ? 6 : 0);
       if (d < ad) { b = a; bd = ad; a = p; ad = d; } else if (d < bd) { b = p; bd = d; }
     }
-    roles[t] = humanActive ? { press: act.teamPress ? a : null, cover: act.teamPress ? b : a } : { press: a, cover: b };
+    roles[t] = humanActive ? { press: hs.press ? a : null, cover: hs.press ? b : a } : { press: a, cover: b };
   }
 }
 function interceptPt(p) {
@@ -2377,7 +2389,7 @@ function carrierAI(p, dt) {
     passTo(p, bp ? bp.p : nearestTo(p.t, p, true, p), false);
     return stay;
   }
-  if (p.t === 0 && p !== ctrl && !window.__auto) return { x: p.x + p.fx * 3, y: p.y + p.fy * 3, s: 5 };
+  if (humanTeam(p.t) && !isHum(p) && !window.__auto) return { x: p.x + p.fx * 3, y: p.y + p.fy * 3, s: 5 };
   const dir = TEAMS[p.t].dir, gx = oppGoalX(p.t);
   const dG = Math.hypot(gx - p.x, 34 - p.y);
   p.dec -= dt;
@@ -2444,16 +2456,17 @@ function steer(p, tx, ty, spd, dt) {
   p.vx += (ex - p.vx) * a; p.vy += (ey - p.vy) * a;
 }
 const spdF = p => (p.t === 1 ? diff.spd : 1) * p.pace * (0.84 + 0.16 * p.stamina) * WX.spd;
-const sprinting = () => act.sprint || padSprint;
+const sprinting = () => rin ? !!rin.s : act.sprint || padSprint;
 let sprintOn = false, camSprint = 0;   // the controlled player is actually sprinting; camera effect eased in/out
 function aiMove(p, dt) { const tg = aiTarget(p, dt); if (tg) steer(p, tg.x, tg.y, tg.s * spdF(p), dt); }
 
 // ---------- Human ----------
 const keys = {};
 const joy = { x: 0, y: 0, id: null };
-const act = { passDown: false, passT: 0, passMode: null, shootDown: false, shootT: 0, sprint: false, teamPress: false, spinDir: { pass: null, shoot: null } };
+let act = { passDown: false, passT: 0, passMode: null, shootDown: false, shootT: 0, sprint: false, teamPress: false, spinDir: { pass: null, shoot: null } };
 const padSpin = { x: 0, y: 0 };
 function getInput() {
+  if (rin) return rin.m > 0.01 ? { x: rin.x, y: rin.y, m: rin.m } : { x: 0, y: 0, m: 0 };
   let sx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0) + joy.x;
   let sy = (keys.down ? 1 : 0) - (keys.up ? 1 : 0) + joy.y + padAx.y;
   sx += padAx.x;
@@ -2515,7 +2528,7 @@ function humanMove(p, dt) {
     if ((idleT > 0.4 && ball.owner !== p) || carry) aiMove(p, dt); else steer(p, p.x, p.y, 0, dt);
   }
 }
-function switchPlayer() { const n = nearestTo(0, ball, true, ctrl); if (n) setCtrl(n); idleT = 0; }
+function switchPlayer() { const n = nearestTo(HT, ball, true, ctrl); if (n) setCtrl(n); idleT = 0; }
 function doTackle() {
   const p = ctrl;
   let dx = ball.x - p.x, dy = ball.y - p.y, d = Math.hypot(dx, dy) || 1;
@@ -2525,6 +2538,7 @@ function doTackle() {
   idleT = 0;
 }
 function pressTackle() {
+  if (netFwd('pressTackle')) return;
   if (state === 'replay') { endReplay(); return; }
   if (state === 'play' && ctrl && ball.owner === ctrl && !ball.held) { doSkill(ctrl); return; }
   if (state === 'play' && pressSave()) return;
@@ -2606,7 +2620,7 @@ function solveShot(x0, y0, z0, v, spin, tspin, gx, ty, tz, pts) {
   return { vx, vy, vz };
 }
 function aimEligible() {
-  if (window.__auto || !ctrl || ctrl.t !== 0 || !ctrl.mustPass || ball.owner !== ctrl || ball.held) return false;
+  if (window.__auto || net || !ctrl || ctrl.t !== 0 || !ctrl.mustPass || ball.owner !== ctrl || ball.held) return false;
   if (state !== 'set' && state !== 'play') return false;
   if (setKind === 'penalty') return true;
   return setKind === 'freekick' && Math.hypot(oppGoalX(0) - ball.x, 34 - ball.y) < 36;
@@ -2796,16 +2810,16 @@ function drawAim() {
 function humanShoot(p, power) {
   if (aimSP && aimSP.p === p) { aimedShot(p, power); return; }
   const inp = getInput();
-  const gx = oppGoalX(0), gdx = gx - p.x, gdy = 34 - p.y, gd = Math.hypot(gdx, gdy);
+  const gx = oppGoalX(p.t), gdx = gx - p.x, gdy = 34 - p.y, gd = Math.hypot(gdx, gdy);
   if (!p.mustPass && ((p.fx * gdx + p.fy * gdy) / gd < -0.2 || gd > 45)) {
-    const v = 15 + power * 19; kick(p, p.fx * v, p.fy * v, 0.8 + power * power * 5); stats.shots[0]++; return;
+    const v = 15 + power * 19; kick(p, p.fx * v, p.fy * v, 0.8 + power * power * 5); stats.shots[p.t]++; return;
   }
   const sp = getSpin('shoot'), zn = shotZone;
-  setZone(null);
+  if (rin) shotZone = null; else setZone(null);
   // A chosen zone overrides the stick: left / centre / right as seen by the shooter facing the goal
-  const zAim = zn ? zn.x * TEAMS[0].dir * (GH - 0.55) / 3.1 : null, zh = zn ? (zn.y > 0 ? 1.95 : 0.28) : undefined;
+  const zAim = zn ? zn.x * TEAMS[p.t].dir * (GH - 0.55) / 3.1 : null, zh = zn ? (zn.y > 0 ? 1.95 : 0.28) : undefined;
   if (sprinting() && !p.mustPass) { chipShot(p, power, zn ? zAim : inp.m > 0.3 ? clamp(inp.y * 1.15, -1, 1) : 0, sp); return; }
-  const aim = zn ? zAim : inp.m > 0.3 ? clamp(inp.y * 1.15, -1, 1) : sp && sp.side ? sp.side * TEAMS[0].dir * 0.75 + gauss() * 0.1 : gauss() * 0.25;
+  const aim = zn ? zAim : inp.m > 0.3 ? clamp(inp.y * 1.15, -1, 1) : sp && sp.side ? sp.side * TEAMS[p.t].dir * 0.75 + gauss() * 0.1 : gauss() * 0.25;
   if (sp && !sp.side && sp.top > 0) { chipShot(p, power, aim, sp); return; }
   if (sp) shoot(p, power, aim, sp.side ? 6.5 * (1.1 - power * 0.4) : 0, sp, sp.top < 0 ? undefined : zh);
   else shoot(p, power, aim, Math.abs(aim) > 0.45 && gd < 32 ? 5 * (1.1 - power * 0.5) : 0, null, zh);
@@ -2813,6 +2827,7 @@ function humanShoot(p, power) {
 function canKick() { return ctrl && ball.owner === ctrl && !ball.held && (state === 'play' || state === 'set'); }
 function startPlay() { if (state === 'set') state = 'play'; }
 function pressPass() {
+  if (netFwd('pressPass')) return;
   if (state === 'replay') { endReplay(); return; }
   if (state !== 'play' && state !== 'set') return;
   const mode = getMode();
@@ -2821,20 +2836,23 @@ function pressPass() {
   act.passDown = true; act.passT = 0;
 }
 function releasePass() {
+  if (netFwd('releasePass', !!act.passSwipe)) { act.passSwipe = false; return; }
   if (act.passDown && act.passMode === 'passe' && canKick() && !(ctrl.mustPass && setKind === 'penalty')) {
     startPlay();
-    if (act.passSwipe) humanThrough(ctrl); else humanPass(ctrl, isTouch ? 0 : act.passT);
+    if (act.passSwipe) humanThrough(ctrl); else humanPass(ctrl, (rin ? rin.touch : isTouch) ? 0 : act.passT);
   }
   act.passSwipe = false;
   act.passDown = false; act.passMode = null;
 }
 function pressThru() {
+  if (netFwd('pressThru')) return;
   if (state === 'replay') { endReplay(); return; }
   if (canKick() && !(ctrl.mustPass && setKind === 'penalty')) { startPlay(); humanThrough(ctrl); }
   else act.teamPress = true;
 }
-function releaseThru() { act.teamPress = false; }
+function releaseThru() { if (netFwd('releaseThru')) return; act.teamPress = false; }
 function pressShoot() {
+  if (netFwd('pressShoot')) return;
   if (state === 'replay') { endReplay(); return; }
   if (canKick()) { act.shootDown = true; act.shootT = 0; return; }
   if (state === 'play' && ctrl && !ball.owner && ball.z > 0.25 && dist(ctrl, ball) < 9) {
@@ -2843,6 +2861,7 @@ function pressShoot() {
   }
 }
 function releaseShoot() {
+  if (netFwd('releaseShoot')) return;
   if (act.shootDown && canKick()) { startPlay(); humanShoot(ctrl, Math.min(1, act.shootT / 0.85)); }
   act.shootDown = false;
 }
@@ -2859,7 +2878,7 @@ function integrate(dt) {
       const n = Math.hypot(p.fx, p.fy);
       if (n < 0.05) { p.fx = p.vx / sp; p.fy = p.vy / sp; } else { p.fx /= n; p.fy /= n; }
     }
-    if (p !== ctrl) p.stamina = sp > 6.6 ? Math.max(0.2, p.stamina - dt * 0.03 * (1.35 - 0.6 * sk(p, 'phy'))) : Math.min(1, p.stamina + dt * 0.1);
+    if (!isHum(p)) p.stamina = sp > 6.6 ? Math.max(0.2, p.stamina - dt * 0.03 * (1.35 - 0.6 * sk(p, 'phy'))) : Math.min(1, p.stamina + dt * 0.1);
     p.phase += (sp < 1 ? sp * 9 : 8.2 + sp * 0.75) * dt;
     p.x = clamp(p.x, -4, L + 4); p.y = clamp(p.y, -3, W + 3);
   }
@@ -3030,9 +3049,7 @@ function setPiece(kind, team, x, y, opts) {
   tk.x = x - dx * 0.7; tk.y = y - dy * 0.7; tk.vx = tk.vy = 0; tk.fx = dx; tk.fy = dy;
   ball.owner = tk;
   if (kind === 'goalkick') { ball.held = true; tk.holdT = 0.5; ball.z = 0.9; tk.noOffside = true; } else tk.mustPass = true;
-  if (kind === 'penalty' && team === 1) setCtrl(gkOf(0));
-  else if (team === 0 && kind !== 'goalkick') setCtrl(tk);
-  else setCtrl(nearestTo(0, ball, true));
+  for (const ht of humanTeams()) withCtx(ht, () => setCtrl(kind === 'penalty' && team !== HT ? gkOf(HT) : team === HT && kind !== 'goalkick' ? tk : nearestTo(HT, ball, true)));
   const titles = { throw: 'Touche', corner: 'Corner', goalkick: 'Six mètres', freekick: 'Coup franc', penalty: 'Penalty !' };
   if (highlight && (kind === 'corner' || kind === 'goalkick' || kind === 'throw') && time - highlight.t < 6 && !shootout && !drill) {
     whistle(0.22); startHighlight(opts.title || titles[kind]);
@@ -3119,6 +3136,7 @@ function startHighlight(title) {
   startReplayShots(fr, [{ from: 0, to: fr.length - 1, speed: 0.5, cam: 'low' }], resume, h.label);
 }
 function endReplay() {
+  if (netFwd('endReplay')) return;
   if (state !== 'replay' || !rp) return;
   const after = rp.after;
   replayChip.style.display = 'none'; shotInfo.style.display = 'none'; rp = null;
@@ -3195,7 +3213,7 @@ function endMatch() {
   if ('speechSynthesis' in window) try { speechSynthesis.cancel(); } catch (e) { /* ignore */ }
   const so = shootout ? shootout.score : null;
   const won = score[0] > score[1] || (so && so[0] > so[1]), lost = score[0] < score[1] || (so && so[0] < so[1]);
-  if (myTeam && matchMode !== 'training') {
+  if (myTeam && matchMode !== 'training' && matchMode !== 'online') {
     // Form moves a little after every match, better after a win
     myTeam.players.forEach(p => { const r = Math.random() + (won ? 0.12 : lost ? -0.12 : 0); p.fm = clamp((p.fm || 0) + (r > 0.78 ? 1 : r < 0.22 ? -1 : 0), -2, 2); });
     saveSettings();
@@ -3253,7 +3271,8 @@ function endMatch() {
       say(`L’aventure européenne s’arrête là pour ${TEAMS[0].name}.`);
     }
     saveSettings();
-  } else say(`C’est la fin du match. ${TEAMS[0].name} ${score[0]}, ${TEAMS[1].name} ${score[1]}.`);
+  } else if (matchMode === 'online') { ctaLabel = 'Rejouer en ligne'; ctaFn = () => netSearch(); say(`C’est la fin du match. ${TEAMS[0].name} ${score[0]}, ${TEAMS[1].name} ${score[1]}.`); }
+  else say(`C’est la fin du match. ${TEAMS[0].name} ${score[0]}, ${TEAMS[1].name} ${score[1]}.`);
   card.innerHTML = `
     ${top}<h1>${res}</h1>
     ${stripeHTML}
@@ -3269,6 +3288,7 @@ function endMatch() {
   $('btnAgain').onclick = () => { initAudio(); ctaFn(); };
   $('btnMenu').onclick = () => { initAudio(); showMenu(); };
   $('btnAgain').focus();
+  if (matchMode === 'online') netHostEnd();
 }
 
 // ---------- Training arena: endless free kicks and penalties ----------
@@ -3428,16 +3448,20 @@ function updateOfficials(dt) {
 // ---------- Main step ----------
 function autoSwitch(dt) {
   autoSwT -= dt; if (autoSwT > 0 || penaltyActive) return; autoSwT = 0.2;
-  if (!ctrl || !players.includes(ctrl)) { setCtrl(nearestTo(0, ball, true)); return; }
+  if (!ctrl || !players.includes(ctrl)) { setCtrl(nearestTo(HT, ball, true)); return; }
   const o = ball.owner;
-  if (o && o.t === 0) { if (!ball.held && o !== ctrl) setCtrl(o); return; }
-  if (ball.target && ball.target.t === 0) return;
+  if (o && o.t === HT) { if (!ball.held && o !== ctrl) setCtrl(o); return; }
+  if (ball.target && ball.target.t === HT) return;
   if (ctrl.slide > 0 || ctrl.penT > 0) return;
-  const n = nearestTo(0, ball, true, null);
+  const n = nearestTo(HT, ball, true, null);
   if (!n || n === ctrl) return;
   const diffD = (ctrl.role === 'GK' ? 1e3 : dist(ctrl, ball)) - dist(n, ball);
   if (!o) { if ((diffD > 3 && idleT > 0.15) || diffD > 9) setCtrl(n); }
   else if ((diffD > 10 && idleT > 0.3) || diffD > 18) setCtrl(n);
+}
+function halfTimePanel() {
+  tvStatsEl.innerHTML = `<div class="tvh">MI-TEMPS</div><div class="tvs"><span>${escapeHtml(TEAMS[0].name)}</span><b>${score[0]} – ${score[1]}</b><span>${escapeHtml(TEAMS[1].name)}</span></div>${scorersHTML()}${statsHTML()}<div class="tvk">${isTouch ? 'Touchez l’écran pour reprendre' : 'Appuyez sur une touche pour reprendre'}</div>`;
+  tvStatsEl.hidden = false;
 }
 function clockText() {
   if (drill) return 'ENTR.';
@@ -3475,8 +3499,7 @@ function step(dt) {
   if (state === 'play' && half === 1 && clock >= 45 + added[0]) {
     state = 'break'; goalT = 8;
     ball.owner = null; ball.held = false; ball.vx *= 0.3; ball.vy *= 0.3;
-    tvStatsEl.innerHTML = `<div class="tvh">MI-TEMPS</div><div class="tvs"><span>${escapeHtml(TEAMS[0].name)}</span><b>${score[0]} – ${score[1]}</b><span>${escapeHtml(TEAMS[1].name)}</span></div>${scorersHTML()}${statsHTML()}<div class="tvk">${isTouch ? 'Touchez l’écran pour reprendre' : 'Appuyez sur une touche pour reprendre'}</div>`;
-    tvStatsEl.hidden = false;
+    halfTimePanel();
     comment(`C’est la mi-temps. ${TEAMS[0].name} ${score[0]}, ${TEAMS[1].name} ${score[1]}.`, true, true);
     whistle(0.3); setTimeout(() => whistle(0.6), 380);
   }
@@ -3484,11 +3507,14 @@ function step(dt) {
   if (state === 'sowait' && shootout) { shootout.wait -= dt; if (shootout.wait <= 0) { shootoutAdvance(); return; } }
   if (state === 'drillwait' && drill) { drill.wait -= dt; if (drill.wait <= 0) { drillAdvance(); return; } }
 
-  if (act.passDown) act.passT += dt;
-  if (act.shootDown) { if (ball.owner !== ctrl) act.shootDown = false; else { act.shootT += dt; if (act.shootT >= 1.05) releaseShoot(); } }
+  for (const ht of humanTeams()) withCtx(ht, () => {
+    if (act.passDown) act.passT += dt;
+    if (act.shootDown) { if (ball.owner !== ctrl) act.shootDown = false; else { act.shootT += dt; if (act.shootT >= 1.05) releaseShoot(); } }
+  });
   if (wallClearAt && time > wallClearAt) { wallClearAt = 0; for (const p of players) p.wall = null; }
 
   computeRoles(); sprintOn = false;   // set again below while the controlled player sprints
+  if (CTX[1]) CTX[1].sprintOn = false;
   const live = state !== 'goal' && state !== 'break';
   for (const p of players) {
     p.cool = Math.max(0, p.cool - dt); p.stun = Math.max(0, p.stun - dt); p.dive = Math.max(0, p.dive - dt); p.penT = Math.max(0, p.penT - dt);
@@ -3535,6 +3561,7 @@ function step(dt) {
       if (assistNow(p)) { idleT += dt; aiMove(p, dt); continue; }
       humanMove(p, dt); continue;
     }
+    if (CTX[1] && p === CTX[1].ctrl && live) { withCtx(1, () => { if (assistNow(p)) { idleT += dt; aiMove(p, dt); } else humanMove(p, dt); }); continue; }
     if (state === 'set' && p === ball.owner && !ball.held) { p.vx = p.vy = 0; continue; }
     aiMove(p, dt);
   }
@@ -3565,7 +3592,7 @@ function step(dt) {
     else if (time - drill.kicked > 3.4) drillResult(false, drillMissLabel());
   }
   updateAim(dt);
-  if (state === 'play' || state === 'set') autoSwitch(dt);
+  if (state === 'play' || state === 'set') for (const ht of humanTeams()) withCtx(ht, () => autoSwitch(dt));
   if (ball.target && !ball.owner && Math.hypot(ball.vx, ball.vy) < 1.2) ball.target = null;
   if (cornerMode && time > cornerMode.until) cornerMode = null;
   updateOfficials(dt);
@@ -5430,7 +5457,7 @@ function resize() {
 }
 function cycleCam() {
   zoomIdx = (zoomIdx + 1) % ZOOMS.length;
-  showMsg(CAM_NAMES[zoomIdx], 1, true); saveSettings();
+  NET_FN.showMsg(CAM_NAMES[zoomIdx], 1, true); saveSettings();
 }
 // ---- Match intro: a flight around the stadium, a dive to the centre circle, then the match camera takes over ----
 const INTRO_D = 17, INTRO_DIVE = [12.4, 15], INTRO_HAND = 15.8;
@@ -5464,6 +5491,9 @@ function startIntro() {
   reveal = drawBall();
   for (const p of players) { p.ix = p.x; p.iy = p.y; }
   introPlace(0, 0);
+  buildLineups();
+}
+function buildLineups() {
   const col = t => `<div class="lu${t ? ' r' : ''}"><h3 style="border-color:${TEAMS[t].color}"><small>${t ? 'EXTÉRIEUR' : 'DOMICILE'}</small>${escapeHtml(TEAMS[t].name)}</h3><ol>${
     players.filter(p => p.t === t).map(p => `<li><b>${p.num}</b><span>${escapeHtml(p.name)}</span><em>${ROLE_FR[p.role] || ''}</em></li>`).join('')}</ol></div>`;
   lineupsEl.innerHTML = col(0) + col(1) + `<div class="lu-skip">${isTouch ? 'Touchez l’écran pour passer' : 'Appuyez sur une touche pour passer'}</div>`;
@@ -5491,6 +5521,9 @@ function introPlace(t, dt) {
     else if (t < SPREAD[0]) { p.fx = 0; p.fy = 1; }
     else { p.fx = TEAMS[p.t].dir; p.fy = 0; }
   }
+  introUI(t);
+}
+function introUI(t) {
   updateReveal(t);
   for (const el of lineupsEl.querySelectorAll('.lu')) el.classList.toggle('on', t > LINEUP_SHOW[0] && t < LINEUP_SHOW[1]);
   if (t >= INTRO_HAND) lineupsEl.hidden = true;
@@ -5504,6 +5537,7 @@ function endIntro() {
   comment(`Les joueurs sont en place, ${TEAMS[0].name} donne le coup d’envoi !`, true);
 }
 function skipIntro() {
+  if (netFwd('skipIntro')) return;
   if (state === 'intro' && introT < INTRO_HAND) { introT = INTRO_HAND; msgT = Math.min(msgT, 0.01); }
   else if (state === 'break' && goalT > 0.4) goalT = 0.4;
 }
@@ -5808,7 +5842,7 @@ function drawOverlay() {
       if (act.shootDown) {
         pw = Math.min(1, act.shootT / 0.85); col = sprinting() ? '#c3a6ff' : act.shootT > 0.85 ? '#ff5a3c' : '#f2c230';
         if (ball.owner === ctrl) {
-          const gx = oppGoalX(0), dG = Math.hypot(gx - ball.x, 34 - ball.y);
+          const gx = oppGoalX(HT), dG = Math.hypot(gx - ball.x, 34 - ball.y);
           const pc = Math.round(shotChance(ctrl, pw, ctrl.mustPass && setKind === 'penalty', dG, sprinting()) * 100);
           ctx.font = '800 16px "Barlow Condensed", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
           const spS = getSpin('shoot');
@@ -5840,7 +5874,7 @@ function drawOverlay() {
   if (aimSP && state !== 'pause' && state !== 'end' && state !== 'menu') drawAim();
   else if (spinPad.style.display !== 'none') spinPad.style.display = 'none';
   if (shootout && state !== 'end') drawShootout();
-  const gk0 = playing && state === 'play' ? gkOf(0) : null;
+  const gk0 = playing && state === 'play' ? gkOf(HT) : null;
   const gkh = gk0 ? gkHint() : null;
   if (gkh) {
     const [gx2, gy2, okg] = proj(gk0.x, gk0.y, 2.6 * FIG);
@@ -6012,7 +6046,7 @@ function sfxRoar() {
 function sfxOoh() { noiseBurst(480, 0.9, 0.25, 0.2, 1.2); }
 function sfxOle() { noiseBurst(620, 1.4, 0.3, 0.08, 0.35); noiseBurst(470, 1.4, 0.32, 0.1, 0.6, 0.4); }
 function sfxSwish() { noiseBurst(3200, 0.8, 0.12, 0.02, 0.12); }
-function buzz(ms) { if (isTouch && navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) { /* ignore */ } } }
+function buzz(ms) { if (rin) return; if (isTouch && navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) { /* ignore */ } } }
 
 // ---------- Commentary ----------
 const commentEl = $('comment');
@@ -6142,7 +6176,7 @@ function loadSettings() {
     if (['surprise', 'clair', 'pluie', 'neige'].includes(s.weather)) weatherPick = s.weather;
     if (['jour', 'nuit'].includes(s.time)) timePick = s.time;
     if (typeof s.muted === 'boolean') muted = s.muted;
-    if (['amical', 'coupe', 'etoiles', 'training'].includes(s.mode)) modePick = s.mode;
+    if (['amical', 'coupe', 'etoiles', 'training', 'online'].includes(s.mode)) modePick = s.mode;
     if (DRILLS.some(d => d[0] === s.drill)) drillPick = s.drill;
     if (Number.isInteger(s.taker) && s.taker >= -1 && s.taker < 11) drillTaker = s.taker;
     if (Number.isInteger(s.mates) && s.mates >= 0 && s.mates <= 4) arenaMates = s.mates;
@@ -6285,17 +6319,18 @@ const zoneBtns = [...zonePad.querySelectorAll('[data-z]')], zoneLab = zonePad.qu
 function setZone(i) {
   shotZone = i == null || (shotZone && shotZone.i === i) ? null : { i, x: ZONES[i][0], y: ZONES[i][1] };
   zoneBtns.forEach((b, k) => b.setAttribute('aria-pressed', !!shotZone && shotZone.i === k));
+  if (netGuest()) netSend({ k: 'a', n: 'zone', a: [shotZone] });
   zoneLab.textContent = shotZone ? `${shotZone.y > 0 ? 'Haut' : 'Bas'} ${shotZone.x < 0 ? 'gauche' : shotZone.x > 0 ? 'droite' : 'centre'}` : 'Zone auto';
 }
 zoneBtns.forEach((b, i) => b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); setZone(i); buzz(10); }));
 function updateZonePad() {
-  const on = !!(ctrl && ctrl.t === 0 && ball.owner === ctrl && !aimSP && !shootout && (state === 'play' || state === 'set') && !window.__auto
-    && Math.abs(oppGoalX(0) - ctrl.x) < 42);
+  const on = !!(ctrl && ctrl.t === HT && ball.owner === ctrl && !aimSP && !shootout && (state === 'play' || state === 'set') && !window.__auto
+    && Math.abs(oppGoalX(HT) - ctrl.x) < 42);
   if (on) { zonePad.classList.toggle('touch', !!isTouch); if (zonePad.style.display !== 'grid') zonePad.style.display = 'grid'; }
   else if (zonePad.style.display !== 'none') zonePad.style.display = 'none';
   // Red marker on the real goal where the shot is aimed
   if (on && shotZone) {
-    const gx = oppGoalX(0), ty = 34 + shotZone.x * TEAMS[0].dir * (GH - 0.55), tz = shotZone.y > 0 ? 1.95 : 0.28;
+    const gx = oppGoalX(HT), ty = 34 + shotZone.x * TEAMS[HT].dir * (GH - 0.55), tz = shotZone.y > 0 ? 1.95 : 0.28;
     const [sx, sy, ok] = proj(gx, ty, tz);
     if (ok) { const r = Math.max(4, Math.abs(proj(gx, ty + 0.3, tz)[0] - sx)); ctx.save(); ctx.lineWidth = 2; ctx.strokeStyle = '#ff2b2b'; ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 3; ctx.strokeRect(sx - r, sy - r, r * 2, r * 2); ctx.restore(); }
   }
@@ -6347,6 +6382,7 @@ bindBtn('bSprint', () => { act.sprint = true; }, () => { act.sprint = false; });
 replayChip.onclick = endReplay;
 
 function togglePause() {
+  if (net && net.live) { if (state !== 'end') netQuitAsk(); return; }
   if (state === 'pause') { state = prevState; $('btnPause').textContent = '⏸'; overlay.hidden = true; return; }
   if (state === 'menu' || state === 'end') return;
   prevState = state; state = 'pause'; $('btnPause').textContent = '▶';
@@ -6473,9 +6509,11 @@ function showTeamEditor() {
 const MODES = [
   ['amical', '⚽', 'Match amical', 'Un match contre l’adversaire de ton choix, sous la météo que tu veux.'],
   ['coupe', '🏆', 'Coupe', 'Quart, demie puis finale : gagne trois matchs pour soulever le trophée.'],
-  ['training', '🎯', 'Entraînement', 'Penaltys, coups francs ou arène libre face au gardien.']
+  ['training', '🎯', 'Entraînement', 'Penaltys, coups francs ou arène libre face au gardien.'],
+  ['online', '🌐', 'Multijoueur', 'Affronte un autre joueur en ligne : la file d’attente te trouve un adversaire.']
 ];
 function menuState() {
+  netClose();
   state = 'menu'; shootout = null; drill = null; setRainSound();
   lineupsEl.hidden = true; tvStatsEl.hidden = true; $('ballReveal').hidden = true; reveal = null;
   if (chantGain && actx) chantGain.gain.setTargetAtTime(0, actx.currentTime, 0.5);
@@ -6542,11 +6580,11 @@ function showOptions() {
     <button class="cta ghost small" id="btnEdit">✎ Créer ou modifier mon équipe (${rosterOvr(myRoster())} de moyenne)</button>
     <div class="opt" id="rowOpp"><span>Adversaire</span><select class="name" id="selOpp" aria-label="Choisir l’adversaire">${teamOptions(oppPick, false)}</select></div>
     <div class="vs" id="vsLine"></div>
-    <div class="opt"><span>Difficulté</span>${seg('diff', Object.keys(DIFFS).map(k => [k, DIFFS[k].label]), diffKey)}</div>
+    <div class="opt" id="rowDiff"><span>Difficulté</span>${seg('diff', Object.keys(DIFFS).map(k => [k, DIFFS[k].label]), diffKey)}</div>
     <div class="opt" id="rowDur"><span>Durée</span>${seg('dur', [[2.5, '2 min 30'], [4, '4 min'], [6, '6 min'], [10, '10 min']], matchMin)}</div>
-    <div class="opt"><span>Météo</span>${seg('wx', [['surprise', 'Surprise'], ['clair', 'Clair'], ['pluie', 'Pluie'], ['neige', 'Neige']], weatherPick)}</div>
+    <div class="opt" id="rowWx"><span>Météo</span>${seg('wx', [['surprise', 'Surprise'], ['clair', 'Clair'], ['pluie', 'Pluie'], ['neige', 'Neige']], weatherPick)}</div>
     <div class="opt" id="rowVenue"><span>Lieu</span>${seg('venue', [['stade', 'Stade'], ['entrainement', 'Entraînement']], venuePick)}</div>
-    <div class="opt"><span>Horaire</span>${seg('time', [['jour', 'Jour'], ['nuit', 'Nocturne']], timePick)}</div>
+    <div class="opt" id="rowTime"><span>Horaire</span>${seg('time', [['jour', 'Jour'], ['nuit', 'Nocturne']], timePick)}</div>
     <div class="opt"><span>Jeu assisté</span>${seg('assist', [['oui', 'Oui'], ['non', 'Non']], assistPick)}</div>
     <details${isTouch ? '' : ' open'}><summary>Commandes</summary><div class="keys">${isTouch ? touchKeys : kbKeys}</div></details>
     <button class="cta" id="btnStart">Coup d’envoi</button>`;
@@ -6554,7 +6592,8 @@ function showOptions() {
   const nameIn = $('teamName');
   const refresh = () => {
     const k0 = KITS.find(k => k.key === myKit);
-    const cupMode = modePick === 'coupe', ldcMode = modePick === 'etoiles', trMode = modePick === 'training';
+    const cupMode = modePick === 'coupe', ldcMode = modePick === 'etoiles', trMode = modePick === 'training', onMode = modePick === 'online';
+    $('rowDiff').style.display = $('rowWx').style.display = $('rowTime').style.display = onMode ? 'none' : '';
     $('rowDrill').style.display = $('rowTaker').style.display = trMode ? '' : 'none';
     $('rowMates').style.display = $('rowDefs').style.display = trMode && drillPick === 'arena' ? '' : 'none';
     $('rowDur').style.display = trMode ? 'none' : '';
@@ -6569,6 +6608,12 @@ function showOptions() {
     $('vsLine').style.display = $('vsLine').textContent ? '' : 'none';
     $('rowOpp').style.display = cupMode || ldcMode ? 'none' : '';
     $('rowName').style.display = myPick === 'perso' ? '' : 'none';
+    if (onMode) {
+      $('rowDur').style.display = $('rowVenue').style.display = $('rowOpp').style.display = $('vsLine').style.display = 'none';
+      $('cupBox').innerHTML = `<div class="cupline">Match en ligne de ${NET_MIN} minutes<span>Météo, horaire et ballon sont tirés au sort pour les deux joueurs. Toi, tu choisis ton équipe, son nom, ton maillot et le jeu assisté.</span></div>`;
+      $('btnStart').textContent = 'Chercher un adversaire';
+      return;
+    }
     if (ldcMode) {
       if (ldc) ldc.group[0].name = myName;
       $('cupBox').innerHTML = ldc
@@ -6616,8 +6661,463 @@ function showOptions() {
   });
   nameIn.onchange = () => { myName = nameIn.value; saveSettings(); };
   refresh(); preview(); setupWind();
-  $('btnStart').onclick = () => { myName = nameIn.value; saveSettings(); initAudio(); startMatch(); };
+  $('btnStart').onclick = () => { myName = nameIn.value; saveSettings(); initAudio(); if (modePick === 'online') netSearch(); else startMatch(); };
 }
+
+// ---------- Online: two players, one match ----------
+// Players meet through the public PeerJS broker (WebRTC data channel, no server of our own). The waiting room is one
+// well-known peer id: the first player to claim it waits there as host, the next one connects to it and plays as guest.
+// The host's browser runs the whole match, with the guest's controls swapped in for his team; the guest sends his
+// controls and draws the snapshots the host streams back 30 times a second.
+const NET_VER = 1, NET_LOBBY = `foot-arena-fc27-lobby-v${NET_VER}`, NET_DT = 1 / 30, NET_MIN = 4;
+const NET_DIFF = { label: 'En ligne', spd: 1, tkRate: 1.1, tkSucc: 0.42, gk: 0, think: 1, err: 1 };
+const NET_LIBS = ['https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js', 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'];
+const netTimeout = () => window.__netTimeout || 30000;   // silence after which the other side counts as gone
+const netHost = () => !!(net && net.role === 'host' && net.live);
+const netGuest = () => !!(net && net.role === 'guest' && net.live);
+const humanTeam = t => t === 0 || netHost();
+const humanTeams = () => netHost() ? [0, 1] : [0];
+
+// -- Controls of each side: the live globals belong to team HT, the other side's wait in CTX
+const newAct = () => ({ passDown: false, passT: 0, passMode: null, shootDown: false, shootT: 0, sprint: false, teamPress: false, spinDir: { pass: null, shoot: null } });
+function ctxSave(c) { Object.assign(c, { ctrl, idleT, stickT, autoSwT, act, rin, sprintOn, assist: assistPick, zone: shotZone }); }
+function ctxLoad(c) { ({ ctrl, idleT, stickT, autoSwT, act, rin, sprintOn } = c); assistPick = c.assist; shotZone = c.zone; }
+function withCtx(t, fn) {
+  if (t === HT || !CTX[t]) return fn();
+  const was = HT;
+  CTX[was] = CTX[was] || {}; ctxSave(CTX[was]); ctxLoad(CTX[t]); HT = t;
+  try { return fn(); } finally { ctxSave(CTX[t]); ctxLoad(CTX[was]); HT = was; }
+}
+function isHum(p) { const o = CTX[1 - HT]; return !!p && (p === ctrl || (!!o && o.ctrl === p)); }
+function humState(t) {
+  if (t === HT) return { c: ctrl, idle: idleT, press: act.teamPress };
+  const c = CTX[t];
+  return c && c.act ? { c: c.ctrl, idle: c.idleT, press: c.act.teamPress } : null;
+}
+function humAssist(p) { return p === ctrl ? assistNow(p) : withCtx(p.t, () => assistNow(p)); }
+
+// -- Sounds and effects the host triggers are replayed on the guest (only the outermost call of a chain is sent)
+const NET_FN = {};
+let netFxDepth = 0;
+function netFx(name, fn) {
+  NET_FN[name] = fn;
+  return function (...a) {
+    if (netHost() && !netFxDepth) net.fx.push([name, a]);
+    netFxDepth++;
+    try { return fn.apply(this, a); } finally { netFxDepth--; }
+  };
+}
+showMsg = netFx('showMsg', showMsg); comment = netFx('comment', comment); say = netFx('say', say); whistle = netFx('whistle', whistle);
+thump = netFx('thump', thump); noiseBurst = netFx('noiseBurst', noiseBurst); crowdSwell = netFx('crowdSwell', crowdSwell);
+sfxKick = netFx('sfxKick', sfxKick); sfxHead = netFx('sfxHead', sfxHead); sfxBounce = netFx('sfxBounce', sfxBounce); sfxPost = netFx('sfxPost', sfxPost);
+sfxAnthem = netFx('sfxAnthem', sfxAnthem); sfxRoar = netFx('sfxRoar', sfxRoar); sfxOoh = netFx('sfxOoh', sfxOoh); sfxOle = netFx('sfxOle', sfxOle);
+sfxSwish = netFx('sfxSwish', sfxSwish); spawnTurf = netFx('spawnTurf', spawnTurf); spawnConfetti = netFx('spawnConfetti', spawnConfetti);
+netHit = netFx('netHit', netHit); tvWipe = netFx('tvWipe', tvWipe); goalFx = netFx('goalFx', goalFx); showShotInfo = netFx('showShotInfo', showShotInfo);
+// What a guest accepts from the host: numbers stay numbers and nothing reaches the page as HTML
+const netNum = v => (Number.isFinite(+v) ? +v : 0);
+const netCol = v => (/^#[0-9a-f]{6}$/i.test(v) ? v : '#ffffff');
+const NET_SAFE = {
+  showShotInfo: (sh, pre) => NET_FN.showShotInfo(sh && { xg: clamp(netNum(sh.xg), 0, 1), by: String(sh.by || ''), kmh: Math.round(netNum(sh.kmh)) }, pre ? escapeHtml(String(pre)) : ''),
+  spawnConfetti: (gx, a, b) => NET_FN.spawnConfetti(gx == null ? null : netNum(gx), netCol(a), netCol(b)),
+  goalFx: (end, col) => NET_FN.goalFx(netNum(end), netCol(col)),
+  showMsg: (t, d, sm, sub) => NET_FN.showMsg(String(t), netNum(d), !!sm, sub == null ? '' : String(sub)),
+  comment: (t, pr, sp) => NET_FN.comment(String(t), !!pr, !!sp),
+  say: t => NET_FN.say(String(t))
+};
+
+// -- Snapshots: players, ball and match state, sent as changes only
+const NET_STATIC = ['id', 't', 'i', 'role', 'f', 'num', 'name', 'st', 'gs', 'pf', 'foot', 'traits', 'plus', 'tb', 'fm', 'age', 'cm', 'sub', 'pace', 'skill', 'ovr', 'hair', 'skin', 'ht', 'hs', 'beard', 'boot'];
+const NET_PSKIP = new Set([...NET_STATIC, 'px', 'py', 'pend', 'ovRec', 'ix', 'iy']), NET_BSKIP = new Set(['px', 'py', 'pz']);
+const DRIB_IDX = new Map(DRIBBLES.map((d, i) => [d, i]));
+let netPl = new Set(), netById = new Map();
+function netRep(k, v) {
+  if (typeof v === 'function') return undefined;
+  if (v && typeof v === 'object') {
+    if (netPl.has(v)) return { $p: v.id };
+    const d = DRIB_IDX.get(v);
+    if (d !== undefined) return { $d: d };
+    if (v.isObject3D || v.isMaterial || v.isTexture) return undefined;
+  }
+  return v;
+}
+const netStr = v => (v === undefined ? '"$u"' : JSON.stringify([v], netRep).slice(1, -1));
+function netRev(k, v) {
+  if (k === '__proto__') return undefined;
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    if (v.$p !== undefined) return netById.get(v.$p) || null;
+    if (v.$d !== undefined) return DRIBBLES[v.$d] || null;
+  }
+  return v;
+}
+const netNums = a => (Array.isArray(a) ? a.map(netNum) : [0, 0]);
+const NET_G = [
+  ['pl', () => players.map(p => p.id), v => { players = v.map(id => netById.get(id)).filter(Boolean); }],
+  ['state', () => state, v => { state = String(v); }],
+  ['clock', () => clock, v => { clock = netNum(v); }],
+  ['half', () => half, v => { half = netNum(v); }],
+  ['score', () => score, v => { score = netNums(v); }],
+  ['stats', () => stats, v => { stats = {}; for (const k of Object.keys(newStats())) stats[k] = netNums(v && v[k]); }],
+  ['added', () => added, v => { added = netNums(v); }],
+  ['setKind', () => setKind, v => { setKind = v == null ? null : String(v); }],
+  ['goalT', () => goalT, v => { goalT = netNum(v); }],
+  ['concede', () => concede, v => { concede = netNum(v); }],
+  ['corner', () => cornerMode, v => { cornerMode = v; }],
+  ['pen', () => penaltyActive, v => { penaltyActive = !!v; }],
+  ['slow', () => [slowT, slowScale], v => { [slowT, slowScale] = netNums(v); }],
+  ['shake', () => shakeT, v => { shakeT = netNum(v); }],
+  ['intro', () => [introT, introA0], v => { [introT, introA0] = netNums(v); }],
+  ['reveal', () => reveal && { seq: reveal.seq, end: reveal.end }, v => {
+    reveal = v && Array.isArray(v.seq) ? { seq: v.seq.filter(e => Array.isArray(e) && BALLS.some(b => b[0] === e[1])).map(e => [netNum(e[0]), e[1]]), end: netNum(v.end), shown: null } : null;
+    if (reveal && !reveal.seq.length) reveal = null;
+  }],
+  ['ballPick', () => ballPick, v => { if (v !== ballPick && BALLS.some(b => b[0] === v)) { ballPick = v; applyBall(); } }],
+  ['dirs', () => [TEAMS[0].dir, TEAMS[1].dir], v => { [TEAMS[0].dir, TEAMS[1].dir] = netNums(v).map(d => (d < 0 ? -1 : 1)); }],
+  ['actCam', () => actCam && { p: actCam.p, t: actCam.t }, v => { actCam = v && v.p ? { p: v.p, t: netNum(v.t) } : null; }],
+  ['rp', () => rp && { shots: rp.shots, si: rp.si, gx: rp.gx, title: rp.title }, v => {
+    if (!v || !Array.isArray(v.shots) || !v.shots[v.si]) { rp = null; return; }
+    rp = { shots: v.shots.map(s => ({ cam: RP_CAM_LAB[s.cam] ? s.cam : 'tv', speed: netNum(s.speed) })), si: netNum(v.si), gx: netNum(v.gx), title: String(v.title || ''), camInit: !!rp && rp.si === v.si && rp.camInit };
+  }],
+  ['goals', () => goalsLog, v => { goalsLog = Array.isArray(v) ? v.map(g => ({ p: g.p || null, ap: g.ap || null, t: netNum(g.t), name: String(g.name || ''), min: escapeHtml(String(g.min || '')), og: !!g.og, pen: !!g.pen })) : []; }],
+  ['card', () => cardFlash, v => { cardFlash = v && { color: netCol(v.color), until: netNum(v.until) }; }],
+  ['wind', () => [wind.x, wind.y, wind.s], v => { [wind.x, wind.y, wind.s] = netNums(v); }],
+  ['ref', () => ref, v => { for (const k of ['x', 'y', 'vx', 'vy', 'fx', 'fy', 'phase']) ref[k] = netNum(v[k]); }],
+  ['lines', () => lines, v => { lines.forEach((l, i) => { const s = v[i] || {}; for (const k of ['x', 'y', 'flag', 'phase', 'v']) l[k] = netNum(s[k]); }); }],
+  ['c2', () => CTX[1] && CTX[1].ctrl, v => { ctrl = v || null; }],
+  ['sp2', () => !!(CTX[1] && CTX[1].sprintOn), v => { sprintOn = !!v; }],
+  ['act2', () => CTX[1] && CTX[1].act && [CTX[1].act.shootDown ? 1 : 0, CTX[1].act.shootT, CTX[1].act.passDown ? 1 : 0], v => { const a = netNums(v); act.shootDown = !!a[0]; act.shootT = a[1]; act.passDown = !!a[2]; }]
+];
+function netDelta(cache, obj, skip) {
+  const out = [];
+  for (const k in obj) {
+    if (skip.has(k)) continue;
+    const s = netStr(obj[k]);
+    if (cache[k] !== s) { cache[k] = s; out.push(JSON.stringify(k) + ':' + s); }
+  }
+  for (const k in cache) if (!(k in obj)) { delete cache[k]; out.push(JSON.stringify(k) + ':"$u"'); }
+  return out.join(',');
+}
+function netSnap() {
+  const n = net, g = [], pp = [];
+  netPl = new Set(players);
+  for (const [k, get] of NET_G) { const s = netStr(get()); if (n.cg[k] !== s) { n.cg[k] = s; g.push(JSON.stringify(k) + ':' + s); } }
+  for (const p of players) { const d = netDelta(n.cp[p.id] || (n.cp[p.id] = {}), p, NET_PSKIP); if (d) pp.push(`[${p.id},{${d}}]`); }
+  const b = netDelta(n.cb, ball, NET_BSKIP), fx = n.fx.length ? JSON.stringify(n.fx, netRep) : '[]';
+  n.fx = [];
+  return `{"k":"s","t":${time},"g":{${g.join(',')}},"p":[${pp.join(',')}],"b":{${b}},"e":${fx}}`;
+}
+function netSet(o, k, v) { if (k === '__proto__' || k === 'constructor') return; if (v === '$u') delete o[k]; else o[k] = v; }
+function netApply(m) {
+  savePrev();   // draw the move from the last snapshot to this one
+  const g = m.g || {};
+  for (const [k, , set] of NET_G) if (Object.prototype.hasOwnProperty.call(g, k)) try { set(g[k]); } catch (e) { /* malformed value */ }
+  for (const [id, f] of m.p || []) { const p = netById.get(id); if (p && f) for (const k in f) if (!NET_PSKIP.has(k)) netSet(p, k, f[k]); }
+  for (const k in m.b || {}) if (!NET_BSKIP.has(k)) netSet(ball, k, m.b[k]);
+  for (const [name, a] of m.e || []) {
+    const fn = Object.prototype.hasOwnProperty.call(NET_SAFE, name) ? NET_SAFE[name] : Object.prototype.hasOwnProperty.call(NET_FN, name) ? NET_FN[name] : null;
+    if (fn && Array.isArray(a)) try { fn(...(fn === NET_SAFE[name] ? a : a.map(x => (x === null || ['string', 'number', 'boolean'].includes(typeof x) ? x : null)))); } catch (e) { /* effect failed */ }
+  }
+  const n = net, now = performance.now();
+  n.gap = clamp(n.lastAt ? (now - n.lastAt) / 1000 : NET_DT, 1 / 90, 0.25); n.lastAt = now;
+  n.t0 = n.t1 == null ? netNum(m.t) : time; n.t1 = netNum(m.t); n.at = 0;
+}
+
+// -- Transport
+function netSendRaw(s) { const c = net && net.conn; if (c && c.open) try { c.send(s); } catch (e) { /* channel closing */ } }
+const netSend = o => netSendRaw(JSON.stringify(o));
+function netFwd(name, ...a) { if (!netGuest()) return false; netSend({ k: 'a', n: name, a }); return true; }
+// The guest's buttons, run on the host with the guest's controls swapped in
+const NET_ACTS = {
+  pressPass, releasePass: sw => { act.passSwipe = !!sw; releasePass(); }, pressThru, releaseThru, pressShoot, releaseShoot, pressTackle,
+  pressAerial: t => { if (['header', 'volley', 'bike'].includes(t)) pressAerial(t); },
+  zone: z => { shotZone = z && ZONES[z.i] ? { i: z.i, x: ZONES[z.i][0], y: ZONES[z.i][1] } : null; },
+  skipIntro: () => withCtx(0, skipIntro), endReplay: () => withCtx(0, endReplay)
+};
+let netLib = null;
+function netLoadLib() {
+  if (window.Peer) return Promise.resolve();
+  if (!netLib) netLib = new Promise((res, rej) => {
+    let i = 0;
+    const next = () => {
+      if (i >= NET_LIBS.length) { netLib = null; rej(new Error('peerjs')); return; }
+      const sc = document.createElement('script'); sc.src = NET_LIBS[i++]; sc.async = true;
+      sc.onload = () => (window.Peer ? res() : next()); sc.onerror = () => { sc.remove(); next(); };
+      document.head.appendChild(sc);
+    };
+    next();
+  });
+  return netLib;
+}
+const netPeer = id => (id ? new Peer(id, Object.assign({ debug: 0 }, window.__peerOpts)) : new Peer(Object.assign({ debug: 0 }, window.__peerOpts)));
+
+// -- Matchmaking: claim the waiting room, or knock on it if someone already waits there
+function netSearch() {
+  netClose(); menuState();
+  card.classList.remove('wide');
+  card.innerHTML = `
+    <button class="back" id="btnNetBack">← Annuler</button>
+    <h1>Multijoueur</h1>
+    ${stripeHTML}
+    <div class="netwait" role="status" aria-live="polite"><div class="spin" aria-hidden="true"></div><b id="netT">Recherche d’un adversaire…</b><span id="netS">Connexion à la file d’attente</span></div>
+    <button class="cta ghost" id="btnNetCancel">Annuler la recherche</button>`;
+  overlay.hidden = false;
+  const n = net = { role: null, peer: null, conn: null, live: false, t0: performance.now() };
+  const cancel = () => { netClose(); showOptions(); };
+  $('btnNetBack').onclick = cancel; $('btnNetCancel').onclick = cancel;
+  n.tick = setInterval(() => {
+    if (net !== n || n.live) { clearInterval(n.tick); return; }
+    const s = Math.floor((performance.now() - n.t0) / 1000), el = $('netS');
+    if (el && n.role === 'host') el.textContent = `Dès qu’un autre joueur lance la recherche, le match commence · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }, 1000);
+  netById = new Map();
+  netLoadLib().then(() => netTry(n), () => netFail(n, 'Le module réseau n’a pas pu être chargé. Vérifie ta connexion.'));
+}
+function netStatus(n, t, s) { if (net !== n) return; const a = $('netT'), b = $('netS'); if (a) a.textContent = t; if (b) b.textContent = s; }
+function netFail(n, msg) {
+  if (net !== n) return;
+  netClose();
+  card.innerHTML = `<h1>Multijoueur</h1>${stripeHTML}<p>${escapeHtml(msg)}</p><button class="cta" id="btnNetRetry">Réessayer</button><button class="cta ghost" id="btnNetMenu">Retour</button>`;
+  $('btnNetRetry').onclick = netSearch; $('btnNetMenu').onclick = showOptions;
+}
+function netRetry(n) {
+  if (net !== n || n.live) return;
+  try { if (n.conn) n.conn.close(); } catch (e) { /* already closed */ }
+  try { if (n.peer) n.peer.destroy(); } catch (e) { /* already gone */ }
+  n.peer = n.conn = null; n.role = null;
+  n.fails = (n.fails || 0) + 1;
+  if (n.fails > 25) { netFail(n, 'Impossible de joindre la file d’attente pour le moment.'); return; }
+  setTimeout(() => netTry(n), 700 + Math.random() * 1600);
+}
+function netTry(n) {
+  if (net !== n || n.live) return;
+  const peer = n.peer = netPeer(NET_LOBBY);
+  peer.on('open', () => {
+    if (net !== n) { peer.destroy(); return; }
+    n.role = 'host'; n.fails = 0;
+    netStatus(n, 'En attente d’un adversaire…', 'Dès qu’un autre joueur lance la recherche, le match commence');
+  });
+  peer.on('connection', conn => netIncoming(n, conn));
+  peer.on('disconnected', () => { if (net === n && n.role === 'host' && !n.live) try { peer.reconnect(); } catch (e) { netRetry(n); } });
+  peer.on('error', e => {
+    if (net !== n || n.live || n.peer !== peer) return;
+    if (e.type === 'unavailable-id') { peer.destroy(); netJoin(n); }
+    else netRetry(n);
+  });
+}
+function netJoin(n) {
+  if (net !== n) return;
+  n.role = 'join';
+  netStatus(n, 'Adversaire trouvé…', 'Connexion en cours');
+  const peer = n.peer = netPeer(null);
+  peer.on('open', () => {
+    if (net !== n) { peer.destroy(); return; }
+    const conn = n.conn = peer.connect(NET_LOBBY, { serialization: 'raw', reliable: true });
+    const to = setTimeout(() => { if (net === n && !n.live && n.conn === conn) netRetry(n); }, 8000);
+    conn.on('open', () => netSend({ k: 'hi', v: NET_VER, name: myTeamName(), kit: myKit, roster: myRoster(), assist: assistPick }));
+    conn.on('data', d => { if (net === n && n.conn === conn) netRecvGuest(n, d, to); });
+    conn.on('close', () => { if (net !== n || n.conn !== conn) return; if (n.live) netLost('Ton adversaire a quitté le match.'); else netRetry(n); });
+    conn.on('error', () => { if (net === n && n.conn === conn && !n.live) netRetry(n); });
+  });
+  peer.on('error', () => { if (net === n && n.peer === peer && !n.live) netRetry(n); });
+}
+const myTeamName = () => (myPick !== 'perso' ? myPick : (myName || '').trim() || (KITS.find(k => k.key === myKit) || KITS[0]).plural).slice(0, 16);
+function netIncoming(n, conn) {
+  if (net !== n || n.conn) {
+    conn.on('open', () => { try { conn.send('{"k":"busy"}'); } catch (e) { /* gone */ } setTimeout(() => conn.close(), 400); });
+    return;
+  }
+  n.conn = conn;
+  const to = setTimeout(() => { if (net === n && !n.live && n.conn === conn) { n.conn = null; conn.close(); } }, 8000);
+  conn.on('data', d => { if (net === n && n.conn === conn) netRecvHost(n, d, to); });
+  conn.on('close', () => { if (net !== n || n.conn !== conn) return; if (n.live) netLost('Ton adversaire a quitté le match.'); else n.conn = null; });
+}
+// The guest's team as the host will play it: a name, a kit and eleven sane players
+function netOpp(m) {
+  let name = String(m.name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 16) || 'Invités';
+  if (name === myTeamName()) name = (name.slice(0, 14) + ' 2');
+  const kit = KITS.some(k => k.key === m.kit) ? m.kit : 'bleu';
+  let roster = Array.isArray(m.roster) && m.roster.length === 11 ? m.roster.map(p => p && typeof p.name === 'string' && p.st ? {
+    name: p.name.replace(/[\u0000-\u001f]/g, '').slice(0, 20) || 'Joueur', st: Object.fromEntries(STAT_KEYS.map(k => [k, clamp(Math.round(netNum(p.st[k]) || 60), 30, 99)])),
+    gs: netNum(p.gs), pf: netNum(p.pf), foot: p.foot === 'G' ? 'G' : 'D', traits: Array.isArray(p.traits) ? p.traits.filter(t => typeof t === 'string') : [],
+    plus: Array.isArray(p.plus) ? p.plus.filter(t => typeof t === 'string') : [], age: netNum(p.age), cm: netNum(p.cm), fm: netNum(p.fm)
+  } : null) : null;
+  if (!roster || !roster.every(Boolean)) roster = genRoster(72, name);
+  return { name, kit, roster, assist: m.assist === 'non' ? 'non' : 'oui' };
+}
+function netRecvHost(n, d, to) {
+  let m; try { m = JSON.parse(d); } catch (e) { return; }
+  if (!m || typeof m !== 'object') return;
+  n.rx = performance.now();
+  if (m.k === 'hi') {
+    if (n.live || m.v !== NET_VER) return;
+    clearTimeout(to);
+    n.opp = netOpp(m); n.live = true; n.role = 'host';
+    try { n.peer.disconnect(); } catch (e) { /* frees the waiting room for the next pair */ }
+    netStartHost(n);
+  } else if (!n.live) return;
+  else if (m.k === 'i' && CTX[1]) Object.assign(CTX[1].rin, { x: clamp(netNum(m.x), -1, 1), y: clamp(netNum(m.y), -1, 1), m: clamp(netNum(m.m), 0, 1), s: !!m.s, touch: !!m.touch, sp: netSpin(m.sp) });
+  else if (m.k === 'a' && Object.prototype.hasOwnProperty.call(NET_ACTS, m.n) && CTX[1]) withCtx(1, () => NET_ACTS[m.n](...(Array.isArray(m.a) ? m.a : [])));
+  else if (m.k === 'bye') netLost('Ton adversaire a quitté le match.');
+}
+function netSpin(sp) {
+  const one = s => s && typeof s === 'object' ? { side: Math.sign(netNum(s.side)), top: Math.sign(netNum(s.top)) } : null;
+  return sp && typeof sp === 'object' ? { pass: one(sp.pass), shoot: one(sp.shoot) } : null;
+}
+function netRecvGuest(n, d, to) {
+  let m; try { m = JSON.parse(d, netRev); } catch (e) { return; }
+  if (!m || typeof m !== 'object') return;
+  n.rx = performance.now();
+  if (m.k === 'busy') { clearTimeout(to); netRetry(n); return; }
+  if (m.k === 'start' && !n.live) { clearTimeout(to); netStartGuest(n, m); return; }
+  if (!n.live) return;
+  if (m.k === 's') netApply(m);
+  else if (m.k === 'end') netGuestEnd();
+  else if (m.k === 'bye') netLost('Ton adversaire a quitté le match.');
+}
+
+// -- Host: the guest's team joins as the away side, then the match runs here
+function netStartHost(n) {
+  n.saved = { timePick, matchMin, venuePick };
+  timePick = pickOf(['jour', 'nuit']); matchMin = NET_MIN; venuePick = 'stade';
+  CTX[0] = null;
+  CTX[1] = { ctrl: null, idleT: 0, stickT: 0, autoSwT: 0, act: newAct(), rin: { x: 0, y: 0, m: 0, s: false, sp: null, touch: false }, sprintOn: false, assist: n.opp.assist, zone: null };
+  n.cg = {}; n.cp = {}; n.cb = {}; n.fx = []; n.sendT = 0;
+  modePick = 'online'; startMatch();
+  if (TEAMS[1].abbr === TEAMS[0].abbr) { TEAMS[1].abbr = TEAMS[1].abbr.slice(0, 2) + '2'; $('abbr1').textContent = TEAMS[1].abbr; }
+  netPl = new Set(players);
+  const plain = players.map(p => { const o = {}; for (const k in p) if (k !== 'pend' && k !== 'ix' && k !== 'iy' && k !== 'px' && k !== 'py') o[k] = p[k]; return o; });
+  netSendRaw(JSON.stringify({ k: 'start', v: NET_VER, wx, time: timePick, min: matchMin, teams: TEAMS.map(t => ({ name: t.name, abbr: t.abbr, color: t.color, trim: t.trim, shorts: t.shorts, socks: t.socks, gk: t.gk, dir: t.dir })), players: plain }, netRep));
+  netSendRaw(netSnap());
+  n.rx = performance.now();   // setting up the stadium can take a while: the guest's silence counts from here
+}
+function netHostFrame(dt) {
+  const n = net;
+  if (n.over) return;
+  if (state !== 'end' && performance.now() - n.rx > netTimeout()) { netLost('La connexion avec ton adversaire a été perdue.'); return; }
+  n.sendT += dt;
+  if (n.sendT < NET_DT) return;
+  n.sendT = 0;
+  const dc = n.conn && n.conn.dataChannel;
+  if (dc && dc.bufferedAmount > 256000) return;   // a slow link skips snapshots instead of falling behind
+  netSendRaw(netSnap());
+}
+function netHostEnd() {
+  const n = net;
+  if (!n || !n.live || n.role !== 'host') return;
+  netSendRaw(netSnap()); netSend({ k: 'end' }); n.over = true;
+  setTimeout(() => { if (net === n) netClose(); }, 1500);
+}
+
+// -- Guest: the host's match, drawn here with this side's controls
+function netStartGuest(n, m) {
+  n.role = 'guest'; n.live = true;
+  n.saved = { timePick, matchMin, venuePick };
+  matchMode = 'online'; diff = NET_DIFF; HT = 1; CTX[0] = CTX[1] = null; rin = null;
+  wx = WEATHERS[m.wx] ? m.wx : 'clair'; WX = WEATHERS[wx]; timePick = m.time === 'nuit' ? 'nuit' : 'jour'; matchMin = NET_MIN; venuePick = 'stade';
+  wind.base = 0;
+  (Array.isArray(m.teams) ? m.teams : []).slice(0, 2).forEach((t, i) => {
+    const T = TEAMS[i], nm = String(t.name || (i ? 'Extérieur' : 'Domicile')).slice(0, 24);
+    Object.assign(T, { name: nm, abbr: String(t.abbr || abbrOf(nm)).slice(0, 3), color: netCol(t.color), trim: netCol(t.trim), shorts: netCol(t.shorts), socks: netCol(t.socks), gk: netCol(t.gk), dir: netNum(t.dir) < 0 ? -1 : 1 });
+  });
+  document.documentElement.style.setProperty('--home', TEAMS[0].color);
+  document.documentElement.style.setProperty('--away', TEAMS[1].color);
+  $('abbr0').textContent = TEAMS[0].abbr; $('abbr1').textContent = TEAMS[1].abbr;
+  players = (Array.isArray(m.players) ? m.players : []).filter(p => p && typeof p === 'object' && Number.isInteger(p.id)).map(src => {
+    const p = {};
+    for (const k in src) netSet(p, k, src[k]);
+    p.t = p.t === 1 ? 1 : 0; p.num = netNum(p.num) | 0; p.name = String(p.name || ''); if (!ROLE_FR[p.role]) p.role = 'MF';
+    p.px = p.x; p.py = p.y;
+    return p;
+  });
+  netById = new Map(players.map(p => [p.id, p]));
+  resetBall(L / 2, W / 2);
+  score = [0, 0]; stats = newStats(); goalsLog = []; shootout = null; drill = null; frames = []; clock = 0; half = 1; ctrl = null;
+  aimSP = null; rp = null; reveal = null; actCam = null; slowT = 0; slowScale = 1;
+  applyAtmosphere(); setRainSound();
+  if (renderer) { drawCrowd(); paintFans(); buildPitch(); drawFascia(); redrawBoards(); buildBench(); }
+  overlay.hidden = true; tvStatsEl.hidden = true; lineupsEl.hidden = true;
+  state = 'set'; updateHud(true);
+  n.t0 = n.t1 = null; n.at = 0; n.gap = NET_DT; n.inS = ''; n.inT = 0; n.ht = false; n.intro = false;
+  n.rx = performance.now();
+}
+function netGuestFrame(dt) {
+  const n = net;
+  n.at += dt;
+  renderAlpha = clamp(n.at / n.gap, 0, 1);
+  if (n.t1 != null) time = n.t0 + (n.t1 - n.t0) * renderAlpha;
+  if (state !== 'end') { updateHud(false); updateButtons(); }
+  // Intro, half-time and replay screens are built here from the shared state, never from the host's HTML
+  const intro = state === 'intro';
+  if (intro && !n.intro) buildLineups();
+  if (intro) introUI(introT);
+  else if (n.intro) { lineupsEl.hidden = true; $('ballReveal').hidden = true; }
+  n.intro = intro;
+  const ht = state === 'break';
+  if (ht !== n.ht) { if (ht) halfTimePanel(); else tvStatsEl.hidden = true; n.ht = ht; }
+  const rpOn = state === 'replay' && !!rp;
+  if (rpOn) updateReplayChip();
+  if ((replayChip.style.display === 'block') !== rpOn) replayChip.style.display = rpOn ? 'block' : 'none';
+  // Controls: sent when they change, and at least five times a second
+  const inp = getInput(), s = JSON.stringify({ k: 'i', x: +inp.x.toFixed(3), y: +inp.y.toFixed(3), m: +inp.m.toFixed(3), s: !!(act.sprint || padSprint), sp: { pass: getSpin('pass'), shoot: getSpin('shoot') }, touch: !!isTouch });
+  n.inT += dt;
+  if (s !== n.inS || n.inT > 0.2) { n.inS = s; n.inT = 0; netSendRaw(s); }
+  if (n.t1 != null && performance.now() - n.rx > netTimeout()) netLost('La connexion avec ton adversaire a été perdue.');
+}
+function netEndCard(title, msg) {
+  card.classList.remove('wide');
+  card.innerHTML = `
+    <h1>${title}</h1>
+    ${stripeHTML}
+    ${msg ? `<p>${escapeHtml(msg)}</p>` : ''}
+    <div class="result">${score[0]} – ${score[1]}</div>
+    ${scorersHTML()}
+    ${statsHTML()}
+    <button class="cta" id="btnAgain">Rejouer en ligne</button>
+    <button class="cta ghost" id="btnMenu">Menu principal</button>`;
+  overlay.hidden = false;
+  $('btnAgain').onclick = () => { initAudio(); netSearch(); };
+  $('btnMenu').onclick = () => { initAudio(); showMenu(); };
+  $('btnAgain').focus();
+}
+function netGuestEnd() {
+  net.live = false;   // a normal end: no goodbye needed
+  netClose(); state = 'end';
+  const won = score[1] > score[0], lost = score[1] < score[0];
+  netEndCard(won ? 'Victoire !' : lost ? 'Défaite' : 'Match nul', '');
+}
+function netLost(msg) {
+  if (!net) return;
+  console.warn('Online match stopped:', msg, net.role, Math.round(performance.now() - (net.rx || 0)), net.t1);
+  const was = net;
+  netClose();
+  if (!was.live || state === 'end') return;
+  state = 'end'; replayChip.style.display = 'none'; tvStatsEl.hidden = true; lineupsEl.hidden = true;
+  if ('speechSynthesis' in window) try { speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+  netEndCard('Match interrompu', msg);
+}
+function netQuitAsk() {
+  card.classList.remove('wide');
+  card.innerHTML = `<h1>Quitter le match ?</h1>${stripeHTML}<p>Le match en ligne continue pendant que ce menu est ouvert. Si tu quittes, ton adversaire est prévenu.</p>
+    <button class="cta" id="btnNetStay">Continuer le match</button><button class="cta ghost" id="btnNetQuit">Quitter le match</button>`;
+  overlay.hidden = false;
+  $('btnNetStay').onclick = () => { overlay.hidden = true; };
+  $('btnNetQuit').onclick = () => { netClose(); showMenu(); };
+  $('btnNetStay').focus();
+}
+function netClose() {
+  const n = net;
+  if (!n) return;
+  net = null;
+  clearInterval(n.tick);
+  if (n.live) netSendRawTo(n, '{"k":"bye"}');
+  setTimeout(() => {
+    try { if (n.conn) n.conn.close(); } catch (e) { /* closed */ }
+    try { if (n.peer) n.peer.destroy(); } catch (e) { /* gone */ }
+  }, 300);
+  if (n.saved) ({ timePick, matchMin, venuePick } = n.saved);
+  CTX[0] = CTX[1] = null; HT = 0; rin = null;
+  if (n.role === 'guest') { ctrl = null; act = newAct(); }
+}
+function netSendRawTo(n, s) { const c = n.conn; if (c && c.open) try { c.send(s); } catch (e) { /* closing */ } }
 
 // ---------- Loop ----------
 let lastT = performance.now(), acc = 0, renderAlpha = 1;
@@ -6628,7 +7128,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   pollGamepad();
   if (commentT > 0 && state !== 'pause') { commentT -= dt; if (commentT <= 0) commentEl.classList.remove('on'); }
-  if (state === 'replay' && rp) {
+  if (netGuest()) netGuestFrame(dt);
+  else if (state === 'replay' && rp) {
     replayTick(dt);
   } else if (!['menu', 'end', 'pause'].includes(state)) {
     if (slowT > 0) { slowT -= dt; if (slowT <= 0) slowScale = 1; }
@@ -6638,8 +7139,9 @@ function frame(now) {
     if (['menu', 'end'].includes(state)) acc = 0;
     updateHud(false); updateButtons();
   }
+  if (netHost()) netHostFrame(dt);
   if (msgT > 0 && state !== 'pause') { msgT -= dt; if (msgT <= 0) { banner.classList.remove('show'); banner.classList.add('hide'); } }
-  if (state === 'replay' || state === 'menu') renderAlpha = 1;
+  if ((state === 'replay' || state === 'menu') && !netGuest()) renderAlpha = 1;
   trackFps(dt);
   const kh = isTouch || ['menu', 'end', 'pause', 'replay', 'intro'].includes(state);
   if (keyHint.hidden !== kh) keyHint.hidden = kh;
@@ -6676,6 +7178,7 @@ window.__game = {
   get state() { return state; }, set state(v) { state = v; }, get score() { return score; }, get stats() { return stats; }, get clock() { return clock; }, get half() { return half; },
   setDiff(k) { diffKey = k; diff = DIFFS[k]; }, setMin(m) { matchMin = m; },
   endReplay, replayTick, updateCam, startHighlight, shoot, shotHeight, markHighlight, setPiece, get ctrl() { return ctrl; }, get models() { return models; }, get rp() { return rp; }, get time() { return time; },
+  get net() { return net; }, get CTX() { return CTX; }, get HT() { return HT; }, netTick: netHostFrame,
   get shootout() { return shootout; }, get players() { return players; }, get camera() { return camera; }, get ballMesh() { return ballMesh; }, gkAction, doSkill, get ball() { return ball; }, setClock(c) { clock = c; if (c >= 45) half = 2; }
 };
 })();
