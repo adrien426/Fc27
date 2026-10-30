@@ -1131,6 +1131,18 @@ function gkMaxZ(p) {
   if (p.gkaT > 0) { if (AERIAL.includes(p.gka)) return 3.05; if (p.gka === 'kneel') return 0.7; if (p.gka === 'star') return 2.1; }
   return 2.7;
 }
+// Diving: the ball has to come along the line of his stretched body (legs, body, arms in the dive direction),
+// not anywhere within a circle around him (that let balls already past him be caught, snapping into his hands)
+function gkCanReach(p, d) {
+  if (!(p.dive > 0)) return d < gkReach(p);
+  const s = Math.hypot(p.diveVx || 0, p.diveVy || 0);
+  if (s < 0.5) return d < 1.2;
+  const ux = p.diveVx / s, uy = p.diveVy / s, dx = ball.x - p.x, dy = ball.y - p.y;
+  const along = dx * ux + dy * uy, perp = Math.abs(dy * ux - dx * uy);
+  const arm = 1.3 + p.diveLift * 0.25 + (p.diveBonus ? 0.25 : 0) + tv(p, 'envergure') * 0.1;
+  // His whole stretched body blocks it, from the legs (behind) to the hands (ahead)
+  return along > -0.95 && along < arm && perp < 0.7;
+}
 function gkReach(p) {
   if (p.dive > 0) return 1.7 + p.diveLift * 0.3 + (p.diveBonus ? 0.35 : 0) + tv(p, 'envergure') * 0.12;
   if (p.gkaT > 0 && p.gka === 'star') return 1.75;
@@ -1990,7 +2002,7 @@ function tryControl() {
     const reach = gkBox ? gkReach(p) : cutting ? 0.55 : 0.95;
     if (ball.z > (gkBox ? gkMaxZ(p) : p.wall ? 1.95 + 0.5 * jh : 1.3)) continue;
     const d = dist(p, ball);
-    if (d < reach && d < bd) { bd = d; best = p; }
+    if ((gkBox ? gkCanReach(p, d) : d < reach) && d < bd) { bd = d; best = p; }
   }
   if (!best) return;
   const sp = Math.hypot(ball.vx, ball.vy);
@@ -2265,7 +2277,7 @@ function gkAI(p) {
       const tl = (p.x - ball.x) / ball.vx;
       const yI = tl > 0 ? ball.y + ball.vy * tl : ball.y;
       const ty = clamp(yI, 34 - GH - 0.3, 34 + GH + 0.3);
-      if (ball.shot && ball.shot.t !== p.t && Math.abs(ty - p.y) > 1.0 && tl > 0 && tl < 0.5) {
+      if (ball.shot && ball.shot.t !== p.t && Math.abs(ty - p.y) > 1.0 && tl > 0.08 && tl < DIVE_T * DIVE_FLY + 0.04) {
         const zAt = ball.z + ball.vz * tl - G * tl * tl / 2;
         if (startDive(p, ty + Math.sign(ty - p.y) * 0.4, Math.max(0, zAt), 0)) { fxLabel(p, 'Plongeon', '#ffffff', 0.9); slowMo(0.75, 0.45, p); }
       } else if (ball.shot && ball.shot.t !== p.t && tl > 0 && tl < 0.3 && !(p.gkaT > 0) && !p.pend) {
@@ -3789,7 +3801,7 @@ function disposeModel(m) {
 }
 function mAct(m, key) {
   let a = m.acts[key];
-  if (!a) { a = m.acts[key] = m.mixer.clipAction(mdl.clips[key]); if (!/^(idle|jog|run|back|strL|strR|gkIdle|fallen|win|walk|gkSide|gkSideR|dance|clap)$/.test(key)) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; } }
+  if (!a) { a = m.acts[key] = m.mixer.clipAction(mdl.clips[key]); if (!/^(idle|idleN|jog|run|back|strL|strR|gkIdle|fallen|win|walk|gkSide|gkSideR|dance|clap)$/.test(key)) { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; } }
   return a;
 }
 // One strike / pass clip per kick; the foot meets the ball about 0.1 s after the chosen start time
@@ -3852,7 +3864,7 @@ function updateModel(p, m, x, y, dt, celebrate) {
   if (m.last && m.ovW > 0.02) W.push([m.last[0], m.ovW, m.last[1]]);
   // Locomotion, split by direction relative to where the player faces
   const sp = Math.hypot(p.vx, p.vy), fw = p.vx * p.fx + p.vy * p.fy, lf = p.vx * p.fy - p.vy * p.fx, mv = clamp((sp - 0.4) / 1.5, 0, 1);
-  const tgt = { [p.role === 'GK' ? 'gkIdle' : 'idle']: 1 - mv };
+  const tgt = { [p.role === 'GK' ? 'gkIdle' : mdl.clips.idleN ? 'idleN' : 'idle']: 1 - mv };   // idleN: standing still, feet planted
   if (mv > 0) {
     const n = Math.abs(fw) + Math.abs(lf) || 1, f = Math.max(0, fw) / n, rs = clamp((sp - 3.5) / 3, 0, 1);
     const wk = mdl.clips.walk ? 1 - clamp((sp - 1.5) / 1.3, 0, 1) : 0, gs = p.role === 'GK' && mdl.clips.gkSide && sp < 4.5;
@@ -3867,7 +3879,7 @@ function updateModel(p, m, x, y, dt, celebrate) {
   const used = new Set();
   for (const [key, w, t] of W) {
     const a = mAct(m, key); used.add(key);
-    if (!m.on.has(key)) { a.reset(); a.play(); m.on.add(key); if (key === 'idle' || key === 'gkIdle' || key === 'win') a.time = Math.random() * 3; }
+    if (!m.on.has(key)) { a.reset(); a.play(); m.on.add(key); if (key === 'idle' || key === 'idleN' || key === 'gkIdle' || key === 'win') a.time = Math.random() * 3; }
     a.setEffectiveWeight(w);
     if (t != null) { a.time = Math.min(t, mdl.clips[key].duration - 0.01); a.setEffectiveTimeScale(0); }
     else a.setEffectiveTimeScale(TS[key] ? clamp(sp / TS[key], 0.5, 1.8) : 1);
